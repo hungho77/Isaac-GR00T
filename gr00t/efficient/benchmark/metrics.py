@@ -36,6 +36,8 @@ class BenchmarkRecord:
     visual_token_count_after: int | None = None
     token_reduction_ratio: float = 0.0
     pruning_method: str = "none"
+    score_mode: str = "none"
+    effective_keep_ratio: float = 1.0
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -58,6 +60,8 @@ RECORD_FIELDS = [
     "keep_ratio",
     "token_reduction_ratio",
     "pruning_method",
+    "score_mode",
+    "effective_keep_ratio",
     "action_l2_vs_baseline",
     "failure_type",
     "notes",
@@ -73,6 +77,7 @@ SUMMARY_NUMERIC_FIELDS = [
     "visual_token_count_after",
     "visual_token_count",
     "keep_ratio",
+    "effective_keep_ratio",
     "token_reduction_ratio",
     "action_l2_vs_baseline",
 ]

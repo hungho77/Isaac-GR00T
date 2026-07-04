@@ -68,20 +68,31 @@ def random_indices(num_tokens: int, keep: int, seed: int = 0) -> list[int]:
     return sorted(rng.sample(range(num_tokens), keep))
 
 
-def gather_tokens(visual_tokens: Any, indices: Sequence[int]) -> Any:
+def gather_tokens(visual_tokens: Any, indices: Any) -> Any:
     """Gather visual tokens along the token axis of a [B, N, D] tensor-like object."""
-    _validate_indices(indices)
-
     try:
         import torch
     except Exception:
         torch = None
 
     if torch is not None and isinstance(visual_tokens, torch.Tensor):
-        index_tensor = torch.as_tensor(list(indices), dtype=torch.long, device=visual_tokens.device)
-        return visual_tokens.index_select(1, index_tensor)
+        index_tensor = torch.as_tensor(indices, dtype=torch.long, device=visual_tokens.device)
+        if index_tensor.dim() == 1:
+            _validate_indices(index_tensor.detach().cpu().tolist())
+            return visual_tokens.index_select(1, index_tensor)
+        if index_tensor.dim() == 2:
+            if index_tensor.shape[0] != visual_tokens.shape[0]:
+                raise ValueError(
+                    "Per-batch token indices must have shape [B, K] matching visual_tokens."
+                )
+            if torch.any(index_tensor < 0):
+                raise ValueError("Token indices must be >= 0.")
+            gather_index = index_tensor.unsqueeze(-1).expand(-1, -1, visual_tokens.shape[-1])
+            return visual_tokens.gather(dim=1, index=gather_index)
+        raise ValueError("Token indices must be 1D [K] or 2D [B, K].")
 
     try:
+        _validate_indices(indices)
         return visual_tokens[:, list(indices), :]
     except Exception as exc:
         raise TypeError(
@@ -105,4 +116,3 @@ def _validate_indices(indices: Sequence[int]) -> None:
             raise TypeError("Token indices must be integers.")
         if idx < 0:
             raise ValueError("Token indices must be >= 0.")
-

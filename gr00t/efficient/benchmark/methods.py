@@ -8,6 +8,7 @@ from typing import Any
 
 from gr00t.efficient.profiler.token import get_visual_token_count
 from gr00t.efficient.pruners.dummy import DummyVisualTokenPruner
+from gr00t.efficient.pruners.vlapruner import VLAPruner
 
 
 class EfficientInferenceMethod:
@@ -57,6 +58,8 @@ class EfficientInferenceMethod:
         after = metadata.get("kept_tokens", before)
         reduction = 0.0 if not before else 1.0 - (float(after) / float(before))
         pruning_method = metadata.get("pruning_method", "none")
+        effective_keep_ratio = metadata.get("effective_keep_ratio")
+        score_mode = metadata.get("score_mode", "none")
 
         if isinstance(record, dict):
             record["method"] = self.method_name
@@ -65,6 +68,8 @@ class EfficientInferenceMethod:
             record["visual_token_count_after"] = after
             record["token_reduction_ratio"] = reduction
             record["pruning_method"] = pruning_method
+            record["effective_keep_ratio"] = effective_keep_ratio
+            record["score_mode"] = score_mode
             return record
 
         if hasattr(record, "method"):
@@ -79,6 +84,10 @@ class EfficientInferenceMethod:
             record.token_reduction_ratio = reduction
         if hasattr(record, "pruning_method"):
             record.pruning_method = pruning_method
+        if hasattr(record, "effective_keep_ratio"):
+            record.effective_keep_ratio = effective_keep_ratio
+        if hasattr(record, "score_mode"):
+            record.score_mode = score_mode
         return record
 
     def metadata(self) -> dict[str, Any]:
@@ -171,4 +180,92 @@ class DummyPruningMethod(EfficientInferenceMethod):
             "mode": self.mode,
             "pruning_method": f"dummy_{self.mode}",
             "notes": "Dummy token selection is only for benchmark pipeline testing.",
+        }
+
+
+class VLAPrunerMethod(EfficientInferenceMethod):
+    """Training-free VLA-Pruner MVP method wrapper."""
+
+    method_name = "vlapruner"
+
+    def __init__(
+        self,
+        keep_ratio: float = 0.75,
+        score_mode: str = "norm",
+        alpha: float = 0.5,
+        beta: float = 0.5,
+        temporal_momentum: float = 0.8,
+        enabled: bool = True,
+        seed: int = 0,
+        **_: Any,
+    ) -> None:
+        self.keep_ratio = keep_ratio
+        self.score_mode = score_mode
+        self.alpha = alpha
+        self.beta = beta
+        self.temporal_momentum = temporal_momentum
+        self.pruner = VLAPruner(
+            keep_ratio=keep_ratio,
+            alpha=alpha,
+            beta=beta,
+            temporal_momentum=temporal_momentum,
+            score_mode=score_mode,
+            enabled=enabled,
+            seed=seed,
+        )
+        self.last_pruning_metadata: dict[str, Any] | None = None
+
+    def reset(self) -> None:
+        self.pruner.reset()
+        self.last_pruning_metadata = None
+
+    def process_visual_tokens(
+        self,
+        visual_tokens: Any,
+        **kwargs: Any,
+    ) -> tuple[Any, dict[str, Any]]:
+        pruned_tokens, pruner_metadata = self.pruner.prune(
+            visual_tokens,
+            attention=kwargs.get("attention"),
+            robot_state=kwargs.get("robot_state"),
+            action_state=kwargs.get("action_state"),
+            timestep=kwargs.get("timestep"),
+        )
+        metadata = {
+            "method": self.method_name,
+            "pruning_method": pruner_metadata.get("pruning_method", self.method_name),
+            "score_mode": self.score_mode,
+            "keep_ratio": self.keep_ratio,
+            "effective_keep_ratio": pruner_metadata.get("effective_keep_ratio"),
+            "token_reduction_ratio": pruner_metadata.get("token_reduction_ratio"),
+            "original_tokens": pruner_metadata.get("original_tokens"),
+            "kept_tokens": pruner_metadata.get("kept_tokens"),
+            "pruning_enabled": True,
+            "pruned": pruner_metadata.get("pruned", False),
+            "used_attention": pruner_metadata.get("used_attention", False),
+            "used_action_score": pruner_metadata.get("used_action_score", False),
+            "used_temporal_smoothing": pruner_metadata.get("used_temporal_smoothing", False),
+        }
+        metadata.update(
+            {
+                key: value
+                for key, value in kwargs.items()
+                if key not in {"attention", "robot_state", "action_state"} and value is not None
+            }
+        )
+        metadata["pruner_metadata"] = pruner_metadata
+        self.last_pruning_metadata = metadata
+        return pruned_tokens, metadata
+
+    def metadata(self) -> dict[str, Any]:
+        return {
+            "method": self.method_name,
+            "keep_ratio": self.keep_ratio,
+            "pruning_enabled": True,
+            "pruning_method": self.method_name,
+            "score_mode": self.score_mode,
+            "alpha": self.alpha,
+            "beta": self.beta,
+            "temporal_momentum": self.temporal_momentum,
+            "notes": "Training-free VLA-Pruner MVP; real GR00T hooks are not connected yet.",
         }

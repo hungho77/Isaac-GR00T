@@ -11,6 +11,7 @@ from gr00t.efficient.benchmark.methods import (
     BaselineMethod,
     DummyPruningMethod,
     EfficientInferenceMethod,
+    VLAPrunerMethod,
 )
 
 
@@ -51,7 +52,7 @@ def build_method(name: str, **kwargs: Any) -> EfficientInferenceMethod:
 def _register_default_methods() -> None:
     register_method("baseline", BaselineMethod)
     register_method("dummy", DummyPruningMethod)
+    register_method("vlapruner", VLAPrunerMethod)
 
 
 _register_default_methods()
-

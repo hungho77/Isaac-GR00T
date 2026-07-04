@@ -73,7 +73,7 @@ class BenchmarkRunner:
 
         for episode_id in range(num_episodes):
             self.method.before_episode(episode_id=episode_id, task=task)
-            visual_tokens = _MockVisualTokens((1, visual_token_count, 64))
+            visual_tokens = self._make_mock_visual_tokens(visual_token_count, episode_id)
             _, hook_metadata = self.method.process_visual_tokens(
                 visual_tokens,
                 timestep=0,
@@ -108,3 +108,14 @@ class BenchmarkRunner:
     def summarize(self, records: list[BenchmarkRecord]) -> dict[str, Any]:
         """Summarize benchmark records."""
         return summarize_metrics(records)
+
+    @staticmethod
+    def _make_mock_visual_tokens(visual_token_count: int, episode_id: int) -> Any:
+        try:
+            import torch
+        except Exception:
+            return _MockVisualTokens((1, visual_token_count, 64))
+
+        generator = torch.Generator()
+        generator.manual_seed(10_000 + episode_id)
+        return torch.randn((1, visual_token_count, 64), generator=generator)

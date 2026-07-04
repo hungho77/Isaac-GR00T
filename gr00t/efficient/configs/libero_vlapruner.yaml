@@ -1,0 +1,22 @@
+benchmark: LIBERO
+method: vlapruner
+keep_ratio: 0.75
+score_mode: norm
+alpha: 0.5
+beta: 0.5
+temporal_momentum: 0.8
+visual_token_count: 256
+num_episodes: 1
+task: debug
+record_metrics:
+  - success_rate
+  - latency_per_action_ms
+  - episode_time_s
+  - gpu_memory_mb
+  - peak_gpu_memory_mb
+  - visual_token_count
+  - visual_token_count_before
+  - visual_token_count_after
+  - token_reduction_ratio
+  - action_l2_vs_baseline
+

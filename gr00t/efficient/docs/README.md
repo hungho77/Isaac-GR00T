@@ -107,3 +107,46 @@ python -m gr00t.efficient.benchmark.run_libero \
   --task debug \
   --output results/efficient_benchmark/day4_libero_dummy_uniform_mock.json
 ```
+
+## Day 5 VLA-Pruner MVP Commands
+Validate VLA-Pruner:
+```bash
+python -m gr00t.efficient.benchmark.validate_vlapruner \
+  --output results/efficient_benchmark/day5_vlapruner_validation.json
+```
+
+Dry-run:
+```bash
+python -m gr00t.efficient.benchmark.run_libero \
+  --dry-run \
+  --method vlapruner \
+  --keep-ratio 0.75 \
+  --score-mode norm \
+  --output results/efficient_benchmark/day5_libero_vlapruner_dryrun.json
+```
+
+Mock VLA-Pruner norm:
+```bash
+python -m gr00t.efficient.benchmark.run_libero \
+  --mock \
+  --method vlapruner \
+  --keep-ratio 0.75 \
+  --score-mode norm \
+  --visual-token-count 256 \
+  --num-episodes 3 \
+  --task debug \
+  --output results/efficient_benchmark/day5_libero_vlapruner_norm_mock.json
+```
+
+Mock VLA-Pruner mean_abs:
+```bash
+python -m gr00t.efficient.benchmark.run_libero \
+  --mock \
+  --method vlapruner \
+  --keep-ratio 0.5 \
+  --score-mode mean_abs \
+  --visual-token-count 256 \
+  --num-episodes 3 \
+  --task debug \
+  --output results/efficient_benchmark/day5_libero_vlapruner_mean_abs_mock.json
+```

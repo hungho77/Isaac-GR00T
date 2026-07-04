@@ -21,6 +21,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--method", default="baseline")
     parser.add_argument("--keep-ratio", type=float, default=1.0)
     parser.add_argument("--dummy-mode", default="first", choices=["first", "uniform", "random"])
+    parser.add_argument("--score-mode", default="norm", choices=["norm", "mean_abs", "attention", "action"])
+    parser.add_argument("--alpha", type=float, default=0.5)
+    parser.add_argument("--beta", type=float, default=0.5)
+    parser.add_argument("--temporal-momentum", type=float, default=0.8)
     parser.add_argument("--visual-token-count", type=int, default=256)
     parser.add_argument("--num-episodes", type=int, default=1)
     parser.add_argument("--task", default="debug")
@@ -49,6 +53,10 @@ def _dry_run_result(args: argparse.Namespace, method_metadata: dict[str, object]
         "method": args.method,
         "keep_ratio": args.keep_ratio,
         "dummy_mode": args.dummy_mode,
+        "score_mode": args.score_mode,
+        "alpha": args.alpha,
+        "beta": args.beta,
+        "temporal_momentum": args.temporal_momentum,
         "visual_token_count": args.visual_token_count,
         "num_episodes": args.num_episodes,
         "task": args.task,
@@ -73,6 +81,10 @@ def run_mock_libero_baseline(args: argparse.Namespace, runner: BenchmarkRunner) 
         "method": args.method,
         "keep_ratio": args.keep_ratio,
         "dummy_mode": args.dummy_mode,
+        "score_mode": args.score_mode,
+        "alpha": args.alpha,
+        "beta": args.beta,
+        "temporal_momentum": args.temporal_momentum,
         "visual_token_count": args.visual_token_count,
         "num_episodes": args.num_episodes,
         "task": args.task,
@@ -102,6 +114,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.method,
             keep_ratio=args.keep_ratio,
             mode=args.dummy_mode,
+            score_mode=args.score_mode,
+            alpha=args.alpha,
+            beta=args.beta,
+            temporal_momentum=args.temporal_momentum,
         )
     except (KeyError, ValueError) as exc:
         raise SystemExit(str(exc)) from exc
