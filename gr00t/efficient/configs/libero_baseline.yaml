@@ -1,0 +1,6 @@
+benchmark: LIBERO
+method: baseline
+keep_ratio: 1.0
+dry_run: false
+output: results/efficient_benchmark/libero_baseline.json
+

@@ -1,0 +1,6 @@
+benchmark: LIBERO-Plus
+method: dummy
+keep_ratio: 0.5
+dry_run: false
+output: results/efficient_benchmark/libero_plus_dummy.json
+
