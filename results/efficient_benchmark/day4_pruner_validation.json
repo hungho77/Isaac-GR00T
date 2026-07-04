@@ -1,0 +1,227 @@
+{
+  "status": "ok",
+  "cases": [
+    {
+      "case": "keep=1.0 mode=first",
+      "input_shape": [
+        2,
+        100,
+        64
+      ],
+      "output_shape": [
+        2,
+        100,
+        64
+      ],
+      "keep_ratio": 1.0,
+      "mode": "first",
+      "status": "ok",
+      "metadata": {
+        "method": "dummy",
+        "original_tokens": 100,
+        "kept_tokens": 100,
+        "keep_ratio": 1.0,
+        "effective_keep_ratio": 1.0,
+        "enabled": true,
+        "pruned": false,
+        "input_shape": [
+          2,
+          100,
+          64
+        ],
+        "output_shape": [
+          2,
+          100,
+          64
+        ],
+        "token_order_preserved": true,
+        "timestep": null,
+        "mode": "first",
+        "selected_indices_shape": [
+          100
+        ],
+        "pruning_method": "dummy_first"
+      }
+    },
+    {
+      "case": "keep=0.75 mode=first",
+      "input_shape": [
+        2,
+        100,
+        64
+      ],
+      "output_shape": [
+        2,
+        75,
+        64
+      ],
+      "keep_ratio": 0.75,
+      "mode": "first",
+      "status": "ok",
+      "metadata": {
+        "method": "dummy",
+        "original_tokens": 100,
+        "kept_tokens": 75,
+        "keep_ratio": 0.75,
+        "effective_keep_ratio": 0.75,
+        "enabled": true,
+        "pruned": true,
+        "input_shape": [
+          2,
+          100,
+          64
+        ],
+        "output_shape": [
+          2,
+          75,
+          64
+        ],
+        "token_order_preserved": true,
+        "timestep": null,
+        "mode": "first",
+        "selected_indices_shape": [
+          75
+        ],
+        "selected_indices_preview": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15
+        ],
+        "pruning_method": "dummy_first"
+      }
+    },
+    {
+      "case": "keep=0.5 mode=uniform",
+      "input_shape": [
+        2,
+        100,
+        64
+      ],
+      "output_shape": [
+        2,
+        50,
+        64
+      ],
+      "keep_ratio": 0.5,
+      "mode": "uniform",
+      "status": "ok",
+      "metadata": {
+        "method": "dummy",
+        "original_tokens": 100,
+        "kept_tokens": 50,
+        "keep_ratio": 0.5,
+        "effective_keep_ratio": 0.5,
+        "enabled": true,
+        "pruned": true,
+        "input_shape": [
+          2,
+          100,
+          64
+        ],
+        "output_shape": [
+          2,
+          50,
+          64
+        ],
+        "token_order_preserved": true,
+        "timestep": null,
+        "mode": "uniform",
+        "selected_indices_shape": [
+          50
+        ],
+        "selected_indices_preview": [
+          0,
+          2,
+          4,
+          6,
+          8,
+          10,
+          12,
+          14,
+          16,
+          18,
+          20,
+          22,
+          24,
+          26,
+          28,
+          30
+        ],
+        "pruning_method": "dummy_uniform"
+      }
+    },
+    {
+      "case": "keep=0.25 mode=random",
+      "input_shape": [
+        2,
+        100,
+        64
+      ],
+      "output_shape": [
+        2,
+        25,
+        64
+      ],
+      "keep_ratio": 0.25,
+      "mode": "random",
+      "status": "ok",
+      "metadata": {
+        "method": "dummy",
+        "original_tokens": 100,
+        "kept_tokens": 25,
+        "keep_ratio": 0.25,
+        "effective_keep_ratio": 0.25,
+        "enabled": true,
+        "pruned": true,
+        "input_shape": [
+          2,
+          100,
+          64
+        ],
+        "output_shape": [
+          2,
+          25,
+          64
+        ],
+        "token_order_preserved": true,
+        "timestep": null,
+        "mode": "random",
+        "selected_indices_shape": [
+          25
+        ],
+        "selected_indices_preview": [
+          5,
+          12,
+          17,
+          18,
+          27,
+          32,
+          33,
+          36,
+          38,
+          39,
+          45,
+          49,
+          51,
+          53,
+          61,
+          62
+        ],
+        "pruning_method": "dummy_random"
+      }
+    }
+  ]
+}

@@ -32,6 +32,10 @@ class BenchmarkRecord:
     action_l2_vs_baseline: float
     failure_type: str
     notes: str
+    visual_token_count_before: int | None = None
+    visual_token_count_after: int | None = None
+    token_reduction_ratio: float = 0.0
+    pruning_method: str = "none"
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -48,8 +52,12 @@ RECORD_FIELDS = [
     "episode_time_s",
     "gpu_memory_mb",
     "peak_gpu_memory_mb",
+    "visual_token_count_before",
+    "visual_token_count_after",
     "visual_token_count",
     "keep_ratio",
+    "token_reduction_ratio",
+    "pruning_method",
     "action_l2_vs_baseline",
     "failure_type",
     "notes",
@@ -61,8 +69,11 @@ SUMMARY_NUMERIC_FIELDS = [
     "episode_time_s",
     "gpu_memory_mb",
     "peak_gpu_memory_mb",
+    "visual_token_count_before",
+    "visual_token_count_after",
     "visual_token_count",
     "keep_ratio",
+    "token_reduction_ratio",
     "action_l2_vs_baseline",
 ]
 

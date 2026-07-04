@@ -74,3 +74,36 @@ python -m gr00t.efficient.benchmark.run_libero \
   --task debug \
   --output results/efficient_benchmark/day3_libero_dummy_mock.json
 ```
+
+## Day 4 Visual Token Pruner Commands
+Validate pruners:
+```bash
+python -m gr00t.efficient.benchmark.validate_pruners \
+  --output results/efficient_benchmark/day4_pruner_validation.json
+```
+
+Mock dummy first:
+```bash
+python -m gr00t.efficient.benchmark.run_libero \
+  --mock \
+  --method dummy \
+  --keep-ratio 0.75 \
+  --dummy-mode first \
+  --visual-token-count 256 \
+  --num-episodes 3 \
+  --task debug \
+  --output results/efficient_benchmark/day4_libero_dummy_first_mock.json
+```
+
+Mock dummy uniform:
+```bash
+python -m gr00t.efficient.benchmark.run_libero \
+  --mock \
+  --method dummy \
+  --keep-ratio 0.5 \
+  --dummy-mode uniform \
+  --visual-token-count 256 \
+  --num-episodes 3 \
+  --task debug \
+  --output results/efficient_benchmark/day4_libero_dummy_uniform_mock.json
+```

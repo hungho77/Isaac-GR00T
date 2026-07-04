@@ -20,6 +20,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", default="results/efficient_benchmark/libero_result.json")
     parser.add_argument("--method", default="baseline")
     parser.add_argument("--keep-ratio", type=float, default=1.0)
+    parser.add_argument("--dummy-mode", default="first", choices=["first", "uniform", "random"])
+    parser.add_argument("--visual-token-count", type=int, default=256)
     parser.add_argument("--num-episodes", type=int, default=1)
     parser.add_argument("--task", default="debug")
     parser.add_argument("--dry-run", action="store_true")
@@ -30,6 +32,8 @@ def build_parser() -> argparse.ArgumentParser:
 def _validate_args(args: argparse.Namespace) -> None:
     if args.num_episodes < 1:
         raise SystemExit("--num-episodes must be >= 1.")
+    if args.visual_token_count < 1:
+        raise SystemExit("--visual-token-count must be >= 1.")
 
 
 def _csv_path_for_json(output_path: Path) -> Path | None:
@@ -44,6 +48,8 @@ def _dry_run_result(args: argparse.Namespace, method_metadata: dict[str, object]
         "config": args.config,
         "method": args.method,
         "keep_ratio": args.keep_ratio,
+        "dummy_mode": args.dummy_mode,
+        "visual_token_count": args.visual_token_count,
         "num_episodes": args.num_episodes,
         "task": args.task,
         "status": "dry_run_ok",
@@ -54,7 +60,11 @@ def _dry_run_result(args: argparse.Namespace, method_metadata: dict[str, object]
 
 def run_mock_libero_baseline(args: argparse.Namespace, runner: BenchmarkRunner) -> dict[str, object]:
     """Create deterministic baseline records without importing LIBERO."""
-    records = runner.run_mock(num_episodes=args.num_episodes, task=args.task)
+    records = runner.run_mock(
+        num_episodes=args.num_episodes,
+        task=args.task,
+        visual_token_count=args.visual_token_count,
+    )
     summary = runner.summarize(records)
     return {
         "status": "mock_ok",
@@ -62,6 +72,8 @@ def run_mock_libero_baseline(args: argparse.Namespace, runner: BenchmarkRunner) 
         "config": args.config,
         "method": args.method,
         "keep_ratio": args.keep_ratio,
+        "dummy_mode": args.dummy_mode,
+        "visual_token_count": args.visual_token_count,
         "num_episodes": args.num_episodes,
         "task": args.task,
         "method_metadata": runner.method.metadata(),
@@ -86,7 +98,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     _validate_args(args)
     try:
-        method = build_method(args.method, keep_ratio=args.keep_ratio)
+        method = build_method(
+            args.method,
+            keep_ratio=args.keep_ratio,
+            mode=args.dummy_mode,
+        )
     except (KeyError, ValueError) as exc:
         raise SystemExit(str(exc)) from exc
 

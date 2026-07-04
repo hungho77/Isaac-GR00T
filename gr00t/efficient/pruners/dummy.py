@@ -4,27 +4,41 @@
 
 from __future__ import annotations
 
-import math
 from typing import Any
 
-from gr00t.efficient.profiler.token import get_visual_token_count
 from gr00t.efficient.pruners.base import VisualTokenPruner
+from gr00t.efficient.pruners.utils import (
+    first_k_indices,
+    gather_tokens,
+    random_indices,
+    uniform_indices,
+)
 
 
 class DummyVisualTokenPruner(VisualTokenPruner):
-    """Keep the first K visual tokens.
+    """Select a subset of visual tokens for pipeline testing.
 
     This is intentionally simple and should only be used to test benchmark
     plumbing. It is not VLA-Pruner, SpecPrune-VLA, ADP, or a model-quality
     pruning method.
     """
 
-    method = "dummy_first_k"
+    method_name = "dummy"
+    _VALID_MODES = {"first", "uniform", "random"}
 
-    def __init__(self, keep_ratio: float = 1.0) -> None:
-        if not 0.0 < keep_ratio <= 1.0:
-            raise ValueError("keep_ratio must be in the interval (0, 1].")
-        self.keep_ratio = keep_ratio
+    def __init__(
+        self,
+        keep_ratio: float = 1.0,
+        mode: str = "first",
+        seed: int = 0,
+        enabled: bool = True,
+    ) -> None:
+        super().__init__(keep_ratio=keep_ratio, enabled=enabled, method_name=self.method_name)
+        if mode not in self._VALID_MODES:
+            raise ValueError(f"Unsupported dummy pruning mode {mode!r}. Use one of {sorted(self._VALID_MODES)}.")
+        self.mode = mode
+        self.seed = seed
+        self.last_selected_indices: list[int] | None = None
 
     def prune(
         self,
@@ -34,46 +48,52 @@ class DummyVisualTokenPruner(VisualTokenPruner):
         action_state: Any | None = None,
         timestep: int | None = None,
     ) -> tuple[Any, dict[str, Any]]:
-        """Slice the token dimension to the first K tokens for pipeline tests."""
-        original_tokens = get_visual_token_count(visual_tokens)
-        if original_tokens is None:
-            kept_tokens = None
-            pruned_tokens = visual_tokens
-        else:
-            kept_tokens = self._kept_token_count(original_tokens)
-            pruned_tokens = self._slice_first_k(visual_tokens, kept_tokens)
+        """Select visual tokens along the token axis of [B, N, D]."""
+        input_shape = self._validate_visual_tokens(visual_tokens)
+        original_tokens = input_shape[1]
+        keep = self._compute_keep_count(original_tokens)
 
-        metadata = {
-            "method": self.method,
-            "keep_ratio": self.keep_ratio,
-            "original_tokens": original_tokens,
-            "kept_tokens": kept_tokens,
-            "timestep": timestep,
-        }
+        if not self.enabled or self.keep_ratio >= 1.0 or keep == original_tokens:
+            self.last_selected_indices = list(range(original_tokens))
+            metadata = self._build_metadata(
+                original_tokens=original_tokens,
+                kept_tokens=original_tokens,
+                input_shape=input_shape,
+                output_shape=input_shape,
+                pruned=False,
+                timestep=timestep,
+                mode=self.mode,
+                selected_indices_shape=[original_tokens],
+                pruning_method=f"dummy_{self.mode}",
+            )
+            self.last_metadata = metadata
+            return visual_tokens, metadata
+
+        selected_indices = self._select_indices(original_tokens, keep)
+        pruned_tokens = gather_tokens(visual_tokens, selected_indices)
+        output_shape = self._validate_visual_tokens(pruned_tokens)
+        self.last_selected_indices = selected_indices
+
+        metadata = self._build_metadata(
+            original_tokens=original_tokens,
+            kept_tokens=keep,
+            input_shape=input_shape,
+            output_shape=output_shape,
+            pruned=True,
+            timestep=timestep,
+            mode=self.mode,
+            selected_indices_shape=[len(selected_indices)],
+            selected_indices_preview=selected_indices[:16],
+            pruning_method=f"dummy_{self.mode}",
+        )
+        self.last_metadata = metadata
         return pruned_tokens, metadata
 
-    def _kept_token_count(self, original_tokens: int) -> int:
-        if original_tokens <= 0:
-            return 0
-        return max(1, min(original_tokens, int(math.ceil(original_tokens * self.keep_ratio))))
-
-    @staticmethod
-    def _slice_first_k(visual_tokens: Any, kept_tokens: int) -> Any:
-        shape = getattr(visual_tokens, "shape", None)
-        if shape is not None:
-            try:
-                ndim = len(shape)
-                if ndim == 0:
-                    return visual_tokens
-                token_axis = -2 if ndim >= 2 else 0
-                slices = [slice(None)] * ndim
-                slices[token_axis] = slice(0, kept_tokens)
-                return visual_tokens[tuple(slices)]
-            except Exception:
-                return visual_tokens
-
-        try:
-            return visual_tokens[:kept_tokens]
-        except Exception:
-            return visual_tokens
-
+    def _select_indices(self, original_tokens: int, keep: int) -> list[int]:
+        if self.mode == "first":
+            return first_k_indices(original_tokens, keep)
+        if self.mode == "uniform":
+            return uniform_indices(original_tokens, keep)
+        if self.mode == "random":
+            return random_indices(original_tokens, keep, seed=self.seed)
+        raise ValueError(f"Unsupported dummy pruning mode {self.mode!r}.")

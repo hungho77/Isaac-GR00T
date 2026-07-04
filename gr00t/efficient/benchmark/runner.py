@@ -36,6 +36,8 @@ class _MockVisualTokens:
                 new_shape[axis] = length
             elif isinstance(selector, int):
                 new_shape[axis] = 1
+            elif hasattr(selector, "__len__"):
+                new_shape[axis] = len(selector)
         return _MockVisualTokens(tuple(new_shape))
 
 
@@ -52,10 +54,17 @@ class BenchmarkRunner:
         self.method = method
         self.profiler = profiler or LatencyProfiler()
 
-    def run_mock(self, num_episodes: int, task: str) -> list[BenchmarkRecord]:
+    def run_mock(
+        self,
+        num_episodes: int,
+        task: str,
+        visual_token_count: int = 256,
+    ) -> list[BenchmarkRecord]:
         """Return deterministic mock records without importing LIBERO."""
         if num_episodes < 1:
             raise ValueError("num_episodes must be >= 1.")
+        if visual_token_count < 1:
+            raise ValueError("visual_token_count must be >= 1.")
 
         reset_peak_memory_stats()
         self.method.reset()
@@ -64,7 +73,7 @@ class BenchmarkRunner:
 
         for episode_id in range(num_episodes):
             self.method.before_episode(episode_id=episode_id, task=task)
-            visual_tokens = _MockVisualTokens((1, 576, 64))
+            visual_tokens = _MockVisualTokens((1, visual_token_count, 64))
             _, hook_metadata = self.method.process_visual_tokens(
                 visual_tokens,
                 timestep=0,
@@ -74,7 +83,7 @@ class BenchmarkRunner:
             self.method.after_episode(episode_id=episode_id, task=task)
 
             kept_tokens = hook_metadata.get("kept_tokens")
-            visual_token_count = int(kept_tokens) if kept_tokens is not None else None
+            visual_token_count_after = int(kept_tokens) if kept_tokens is not None else None
             record = BenchmarkRecord(
                 benchmark=self.benchmark_name,
                 method=self.method.method_name,
@@ -86,7 +95,7 @@ class BenchmarkRunner:
                 episode_time_s=12.0 + (episode_id * 0.25),
                 gpu_memory_mb=4096.0,
                 peak_gpu_memory_mb=5120.0,
-                visual_token_count=visual_token_count,
+                visual_token_count=visual_token_count_after,
                 keep_ratio=self.method.keep_ratio,
                 action_l2_vs_baseline=0.0,
                 failure_type="",
@@ -99,4 +108,3 @@ class BenchmarkRunner:
     def summarize(self, records: list[BenchmarkRecord]) -> dict[str, Any]:
         """Summarize benchmark records."""
         return summarize_metrics(records)
-

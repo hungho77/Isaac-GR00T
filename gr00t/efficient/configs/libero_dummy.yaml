@@ -1,5 +1,7 @@
 benchmark: LIBERO
 method: dummy
 keep_ratio: 0.75
+dummy_mode: first
+visual_token_count: 256
 num_episodes: 1
 task: debug
