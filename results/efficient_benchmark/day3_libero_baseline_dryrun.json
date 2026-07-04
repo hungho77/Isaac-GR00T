@@ -1,0 +1,18 @@
+{
+  "benchmark": "LIBERO",
+  "config": "gr00t/efficient/configs/libero_baseline.yaml",
+  "method": "baseline",
+  "keep_ratio": 1.0,
+  "num_episodes": 1,
+  "task": "debug",
+  "status": "dry_run_ok",
+  "available_methods": [
+    "baseline",
+    "dummy"
+  ],
+  "method_metadata": {
+    "method": "baseline",
+    "keep_ratio": 1.0,
+    "pruning_enabled": false
+  }
+}

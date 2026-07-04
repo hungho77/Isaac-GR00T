@@ -44,3 +44,33 @@ python -m gr00t.efficient.benchmark.run_libero \
   --task debug \
   --output results/efficient_benchmark/day2_libero_baseline_mock.json
 ```
+
+## Day 3 Method Registry Commands
+List/dry-run baseline:
+```bash
+python -m gr00t.efficient.benchmark.run_libero \
+  --dry-run \
+  --method baseline \
+  --output results/efficient_benchmark/day3_libero_baseline_dryrun.json
+```
+
+Mock baseline:
+```bash
+python -m gr00t.efficient.benchmark.run_libero \
+  --mock \
+  --method baseline \
+  --num-episodes 3 \
+  --task debug \
+  --output results/efficient_benchmark/day3_libero_baseline_mock.json
+```
+
+Mock dummy:
+```bash
+python -m gr00t.efficient.benchmark.run_libero \
+  --mock \
+  --method dummy \
+  --keep-ratio 0.75 \
+  --num-episodes 3 \
+  --task debug \
+  --output results/efficient_benchmark/day3_libero_dummy_mock.json
+```

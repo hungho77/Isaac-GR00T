@@ -9,13 +9,9 @@ import json
 from pathlib import Path
 from typing import Sequence
 
-from gr00t.efficient.benchmark.metrics import (
-    BenchmarkRecord,
-    summarize_metrics,
-    write_csv,
-    write_json,
-)
-from gr00t.efficient.profiler.memory import reset_peak_memory_stats
+from gr00t.efficient.benchmark.metrics import write_csv, write_json
+from gr00t.efficient.benchmark.registry import build_method, list_methods
+from gr00t.efficient.benchmark.runner import BenchmarkRunner
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -31,11 +27,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _validate_day2_args(args: argparse.Namespace) -> None:
-    if args.method != "baseline":
-        raise SystemExit("Day 2 run_libero supports only --method baseline.")
-    if args.keep_ratio != 1.0:
-        raise SystemExit("Baseline profiling must use --keep-ratio 1.0.")
+def _validate_args(args: argparse.Namespace) -> None:
     if args.num_episodes < 1:
         raise SystemExit("--num-episodes must be >= 1.")
 
@@ -46,7 +38,7 @@ def _csv_path_for_json(output_path: Path) -> Path | None:
     return None
 
 
-def _dry_run_result(args: argparse.Namespace) -> dict[str, object]:
+def _dry_run_result(args: argparse.Namespace, method_metadata: dict[str, object]) -> dict[str, object]:
     return {
         "benchmark": "LIBERO",
         "config": args.config,
@@ -55,35 +47,15 @@ def _dry_run_result(args: argparse.Namespace) -> dict[str, object]:
         "num_episodes": args.num_episodes,
         "task": args.task,
         "status": "dry_run_ok",
+        "available_methods": list_methods(),
+        "method_metadata": method_metadata,
     }
 
 
-def run_mock_libero_baseline(args: argparse.Namespace) -> dict[str, object]:
+def run_mock_libero_baseline(args: argparse.Namespace, runner: BenchmarkRunner) -> dict[str, object]:
     """Create deterministic baseline records without importing LIBERO."""
-    reset_peak_memory_stats()
-    records: list[BenchmarkRecord] = []
-    for episode_id in range(args.num_episodes):
-        records.append(
-            BenchmarkRecord(
-                benchmark="LIBERO",
-                method="baseline",
-                task=args.task,
-                episode_id=episode_id,
-                success=True,
-                success_rate=1.0,
-                latency_per_action_ms=42.0 + (episode_id * 1.5),
-                episode_time_s=12.0 + (episode_id * 0.25),
-                gpu_memory_mb=4096.0,
-                peak_gpu_memory_mb=5120.0,
-                visual_token_count=576,
-                keep_ratio=1.0,
-                action_l2_vs_baseline=0.0,
-                failure_type="",
-                notes="mock baseline record; no LIBERO environment was run",
-            )
-        )
-
-    summary = summarize_metrics(records)
+    records = runner.run_mock(num_episodes=args.num_episodes, task=args.task)
+    summary = runner.summarize(records)
     return {
         "status": "mock_ok",
         "benchmark": "LIBERO",
@@ -92,12 +64,13 @@ def run_mock_libero_baseline(args: argparse.Namespace) -> dict[str, object]:
         "keep_ratio": args.keep_ratio,
         "num_episodes": args.num_episodes,
         "task": args.task,
+        "method_metadata": runner.method.metadata(),
         "summary": summary,
         "records": records,
     }
 
 
-def run_real_libero_baseline() -> dict[str, object]:
+def run_real_libero_baseline(method: object, args: argparse.Namespace) -> dict[str, object]:
     """Placeholder for the real LIBERO baseline integration."""
     raise NotImplementedError(
         "Real LIBERO baseline profiling is not wired into gr00t.efficient yet. "
@@ -105,23 +78,29 @@ def run_real_libero_baseline() -> dict[str, object]:
         "for GR00T policy serving and gr00t/eval/rollout_policy.py for "
         "LIBERO rollouts. Add metric/profiler collection around that path "
         "after gr00t/eval/sim/LIBERO/setup_libero.sh and the LIBERO checkpoint "
-        "are available."
+        f"are available. Requested method={getattr(method, 'method_name', args.method)!r}."
     )
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    _validate_day2_args(args)
+    _validate_args(args)
+    try:
+        method = build_method(args.method, keep_ratio=args.keep_ratio)
+    except (KeyError, ValueError) as exc:
+        raise SystemExit(str(exc)) from exc
+
+    runner = BenchmarkRunner(benchmark_name="LIBERO", method=method)
     output_path = Path(args.output)
 
     if args.dry_run:
-        result = _dry_run_result(args)
+        result = _dry_run_result(args, method.metadata())
         write_json(output_path, result)
         print(json.dumps(result, indent=2))
         return 0
 
     if args.mock:
-        result = run_mock_libero_baseline(args)
+        result = run_mock_libero_baseline(args, runner)
         write_json(output_path, result)
         records = result["records"]
         csv_path = _csv_path_for_json(output_path)
@@ -133,7 +112,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     try:
-        result = run_real_libero_baseline()
+        result = run_real_libero_baseline(method=method, args=args)
     except NotImplementedError as exc:
         raise SystemExit(str(exc)) from exc
     write_json(output_path, result)
