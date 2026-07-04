@@ -26,3 +26,21 @@ python -m gr00t.efficient.benchmark.run_libero --dry-run --method baseline --out
 python -m gr00t.efficient.benchmark.run_libero_plus --dry-run --method baseline --output results/efficient_benchmark/day1_libero_plus_dryrun.json
 ```
 
+## Day 2 LIBERO Baseline Commands
+Dry run:
+```bash
+python -m gr00t.efficient.benchmark.run_libero \
+  --dry-run \
+  --method baseline \
+  --output results/efficient_benchmark/day2_libero_baseline_dryrun.json
+```
+
+Mock baseline:
+```bash
+python -m gr00t.efficient.benchmark.run_libero \
+  --mock \
+  --method baseline \
+  --num-episodes 3 \
+  --task debug \
+  --output results/efficient_benchmark/day2_libero_baseline_mock.json
+```

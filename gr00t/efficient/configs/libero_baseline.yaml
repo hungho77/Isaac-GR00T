@@ -1,6 +1,15 @@
 benchmark: LIBERO
 method: baseline
 keep_ratio: 1.0
+num_episodes: 1
+task: debug
 dry_run: false
 output: results/efficient_benchmark/libero_baseline.json
-
+record_metrics:
+  - success_rate
+  - latency_per_action_ms
+  - episode_time_s
+  - gpu_memory_mb
+  - peak_gpu_memory_mb
+  - visual_token_count
+  - action_l2_vs_baseline

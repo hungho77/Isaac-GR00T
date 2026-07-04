@@ -21,6 +21,20 @@ def get_cuda_memory_stats() -> dict[str, float]:
     except Exception:
         return _empty_memory_stats()
 
+
+def reset_peak_memory_stats() -> None:
+    """Reset CUDA peak memory counters when torch and CUDA are available."""
+    try:
+        import torch
+    except Exception:
+        return
+
+    try:
+        if torch.cuda.is_available():
+            torch.cuda.reset_peak_memory_stats()
+    except Exception:
+        return
+
     try:
         if not torch.cuda.is_available():
             return _empty_memory_stats()
@@ -34,4 +48,3 @@ def get_cuda_memory_stats() -> dict[str, float]:
         }
     except Exception:
         return _empty_memory_stats()
-
