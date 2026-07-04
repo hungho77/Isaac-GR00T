@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Sequence
 
 from gr00t.efficient.benchmark.metrics import write_csv, write_json
+from gr00t.efficient.benchmark.real_libero_adapter import RealLiberoAdapter
 from gr00t.efficient.benchmark.registry import build_method, list_methods
 from gr00t.efficient.benchmark.runner import BenchmarkRunner
 
@@ -34,6 +35,26 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--visual-token-count", type=int, default=256)
     parser.add_argument("--num-episodes", type=int, default=1)
     parser.add_argument("--task", default="debug")
+    parser.add_argument("--checkpoint-path", default="")
+    parser.add_argument("--model-path", default="")
+    parser.add_argument("--data-root", default="")
+    parser.add_argument("--suite", default="libero_10")
+    parser.add_argument("--max-steps", type=int, default=720)
+    parser.add_argument("--seed", type=int, default=None)
+    parser.add_argument("--device", default="cuda")
+    parser.add_argument("--save-actions", action="store_true")
+    parser.add_argument("--save-traces", action="store_true")
+    parser.add_argument("--real-output-dir", default="results/efficient_benchmark/real_libero")
+    parser.add_argument("--real-command", default="")
+    parser.add_argument("--eval-config", default="")
+    parser.add_argument("--policy-client-host", default="127.0.0.1")
+    parser.add_argument("--policy-client-port", type=int, default=5555)
+    parser.add_argument("--n-envs", type=int, default=1)
+    parser.add_argument("--n-action-steps", type=int, default=8)
+    parser.add_argument("--video-dir", default=None)
+    parser.add_argument("--libero-python", default="")
+    parser.add_argument("--hook-visual-tokens", action="store_true")
+    parser.add_argument("--disable-visual-token-hook", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--mock", action="store_true")
     return parser
@@ -46,6 +67,12 @@ def _validate_args(args: argparse.Namespace) -> None:
         raise SystemExit("--visual-token-count must be >= 1.")
     if args.reuse_steps < 1:
         raise SystemExit("--reuse-steps must be >= 1.")
+    if args.max_steps < 1:
+        raise SystemExit("--max-steps must be >= 1.")
+    if args.n_envs < 1:
+        raise SystemExit("--n-envs must be >= 1.")
+    if args.n_action_steps < 1:
+        raise SystemExit("--n-action-steps must be >= 1.")
 
 
 def _csv_path_for_json(output_path: Path) -> Path | None:
@@ -74,6 +101,15 @@ def _dry_run_result(args: argparse.Namespace, method_metadata: dict[str, object]
         "visual_token_count": args.visual_token_count,
         "num_episodes": args.num_episodes,
         "task": args.task,
+        "suite": args.suite,
+        "checkpoint_path": args.checkpoint_path,
+        "model_path": args.model_path,
+        "max_steps": args.max_steps,
+        "seed": args.seed,
+        "device": args.device,
+        "real_output_dir": args.real_output_dir,
+        "hook_visual_tokens": args.hook_visual_tokens,
+        "disable_visual_token_hook": args.disable_visual_token_hook,
         "status": "dry_run_ok",
         "available_methods": list_methods(),
         "method_metadata": method_metadata,
@@ -117,15 +153,27 @@ def run_mock_libero_baseline(args: argparse.Namespace, runner: BenchmarkRunner) 
 
 
 def run_real_libero_baseline(method: object, args: argparse.Namespace) -> dict[str, object]:
-    """Placeholder for the real LIBERO baseline integration."""
-    raise NotImplementedError(
-        "Real LIBERO baseline profiling is not wired into gr00t.efficient yet. "
-        "The repo entrypoints to connect are gr00t/eval/run_gr00t_server.py "
-        "for GR00T policy serving and gr00t/eval/rollout_policy.py for "
-        "LIBERO rollouts. Add metric/profiler collection around that path "
-        "after gr00t/eval/sim/LIBERO/setup_libero.sh and the LIBERO checkpoint "
-        f"are available. Requested method={getattr(method, 'method_name', args.method)!r}."
-    )
+    """Run real LIBERO through the efficient benchmark adapter."""
+    adapter = RealLiberoAdapter(args=args, method=method)
+    records = adapter.run()
+    runner = BenchmarkRunner(benchmark_name="LIBERO", method=method)
+    summary = runner.summarize(records)
+    return {
+        "status": "real_ok",
+        "benchmark": "LIBERO",
+        "config": args.config,
+        "method": getattr(method, "method_name", args.method),
+        "keep_ratio": getattr(method, "keep_ratio", args.keep_ratio),
+        "suite": args.suite,
+        "task": args.task,
+        "num_episodes": args.num_episodes,
+        "max_steps": args.max_steps,
+        "seed": args.seed,
+        "device": args.device,
+        "method_metadata": method.metadata() if hasattr(method, "metadata") else {},
+        "summary": summary,
+        "records": records,
+    }
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -173,9 +221,15 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     try:
         result = run_real_libero_baseline(method=method, args=args)
-    except NotImplementedError as exc:
+    except (RuntimeError, ImportError, FileNotFoundError, NotImplementedError) as exc:
         raise SystemExit(str(exc)) from exc
     write_json(output_path, result)
+    records = result.get("records", [])
+    csv_path = _csv_path_for_json(output_path)
+    if csv_path is not None:
+        write_csv(csv_path, records)
+        result["csv_output"] = str(csv_path)
+        write_json(output_path, result)
     print(json.dumps(result, indent=2))
     return 0
 

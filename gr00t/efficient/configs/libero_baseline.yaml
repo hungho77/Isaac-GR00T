@@ -5,6 +5,10 @@ num_episodes: 1
 task: debug
 dry_run: false
 output: results/efficient_benchmark/libero_baseline.json
+efficient_inference:
+  enabled: false
+  method: baseline
+  hook_visual_tokens: false
 record_metrics:
   - success_rate
   - latency_per_action_ms

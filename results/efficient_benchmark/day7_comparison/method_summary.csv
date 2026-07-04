@@ -1,0 +1,7 @@
+method,num_records,mean_success_rate,mean_latency_per_action_ms,mean_episode_time_s,mean_gpu_memory_mb,mean_peak_gpu_memory_mb,mean_visual_token_count_after,mean_keep_ratio,mean_token_reduction_ratio,mean_action_l2_vs_baseline,speedup_vs_baseline
+adp,5,1.0,46.0,12.5,4096.0,5120.0,164.0,0.64,0.359375,0.0,0.9782608695652174
+adp_vlapruner,5,1.0,46.0,12.5,4096.0,5120.0,164.0,0.64,0.359375,0.0,0.9782608695652174
+baseline,5,1.0,45.0,12.5,4096.0,5120.0,256.0,1.0,0.0,0.0,1.0
+dummy,15,1.0,46.0,12.5,4096.0,5120.0,158.0,0.6166666666666667,0.3828125,0.0,0.9782608695652174
+specprune,15,1.0,46.0,12.5,4096.0,5120.0,158.0,0.6166666666666667,0.3828125,0.0,0.9782608695652174
+vlapruner,15,1.0,46.0,12.5,4096.0,5120.0,158.0,0.6166666666666667,0.3828125,0.0,0.9782608695652174

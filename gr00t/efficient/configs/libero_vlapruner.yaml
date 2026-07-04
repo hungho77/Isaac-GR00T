@@ -8,6 +8,10 @@ temporal_momentum: 0.8
 visual_token_count: 256
 num_episodes: 1
 task: debug
+efficient_inference:
+  enabled: true
+  method: vlapruner
+  hook_visual_tokens: true
 record_metrics:
   - success_rate
   - latency_per_action_ms
@@ -19,4 +23,3 @@ record_metrics:
   - visual_token_count_after
   - token_reduction_ratio
   - action_l2_vs_baseline
-

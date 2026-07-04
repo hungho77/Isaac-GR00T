@@ -193,3 +193,72 @@ python -m gr00t.efficient.benchmark.run_libero \
   --task debug \
   --output results/efficient_benchmark/day6_libero_adp_vlapruner_mock.json
 ```
+
+## Day 7 Comparison + Reporting Commands
+Run full mock comparison:
+```bash
+python -m gr00t.efficient.benchmark.run_comparison \
+  --mock \
+  --benchmark LIBERO \
+  --num-episodes 5 \
+  --visual-token-count 256 \
+  --task debug \
+  --output-dir results/efficient_benchmark/day7_comparison
+```
+
+Collect results:
+```bash
+python -m gr00t.efficient.benchmark.collect_results \
+  --input-dir results/efficient_benchmark/day7_comparison \
+  --output-dir results/efficient_benchmark/day7_comparison
+```
+
+Generate report:
+```bash
+python -m gr00t.efficient.benchmark.generate_report \
+  --summary-csv results/efficient_benchmark/day7_comparison/method_summary.csv \
+  --output results/efficient_benchmark/day7_comparison/benchmark_report.md
+```
+
+## Real LIBERO Evaluation Commands
+LIBERO-Plus is a future eval-only benchmark for robustness. Do not use LIBERO-Plus for training or fine-tuning in this framework.
+
+Real LIBERO baseline:
+```bash
+python -m gr00t.efficient.benchmark.run_libero \
+  --method baseline \
+  --keep-ratio 1.0 \
+  --model-path checkpoints/GR00T-N1.7-LIBERO/libero_10 \
+  --num-episodes 1 \
+  --task debug \
+  --save-actions \
+  --output results/efficient_benchmark/real_libero/day8_baseline_real.json
+```
+
+Real DummyPruner:
+```bash
+python -m gr00t.efficient.benchmark.run_libero \
+  --method dummy \
+  --keep-ratio 0.75 \
+  --dummy-mode uniform \
+  --model-path checkpoints/GR00T-N1.7-LIBERO/libero_10 \
+  --num-episodes 1 \
+  --task debug \
+  --save-actions \
+  --output results/efficient_benchmark/real_libero/day10_dummy_keep075_uniform_real.json
+```
+
+Real VLA-Pruner:
+```bash
+python -m gr00t.efficient.benchmark.run_libero \
+  --method vlapruner \
+  --keep-ratio 0.75 \
+  --score-mode norm \
+  --model-path checkpoints/GR00T-N1.7-LIBERO/libero_10 \
+  --num-episodes 1 \
+  --task debug \
+  --save-actions \
+  --output results/efficient_benchmark/real_libero/day11_vlapruner_keep075_norm_real.json
+```
+
+If using the original two-terminal server/client baseline, pass `--real-command "<existing rollout command>"` to parse the rollout output into the efficient benchmark schema.

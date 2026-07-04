@@ -5,3 +5,7 @@ dummy_mode: first
 visual_token_count: 256
 num_episodes: 1
 task: debug
+efficient_inference:
+  enabled: true
+  method: dummy
+  hook_visual_tokens: true
