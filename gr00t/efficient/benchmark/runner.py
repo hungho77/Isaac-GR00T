@@ -74,11 +74,14 @@ class BenchmarkRunner:
         for episode_id in range(num_episodes):
             self.method.before_episode(episode_id=episode_id, task=task)
             visual_tokens = self._make_mock_visual_tokens(visual_token_count, episode_id)
+            action_state, prev_action_state = self._make_mock_action_states(episode_id)
             _, hook_metadata = self.method.process_visual_tokens(
                 visual_tokens,
-                timestep=0,
+                timestep=episode_id,
                 episode_id=episode_id,
                 task=task,
+                action_state=action_state,
+                prev_action_state=prev_action_state,
             )
             self.method.after_episode(episode_id=episode_id, task=task)
 
@@ -119,3 +122,15 @@ class BenchmarkRunner:
         generator = torch.Generator()
         generator.manual_seed(10_000 + episode_id)
         return torch.randn((1, visual_token_count, 64), generator=generator)
+
+    @staticmethod
+    def _make_mock_action_states(episode_id: int) -> tuple[Any | None, Any | None]:
+        """Cycle deterministic action states for ADP scheduler mock coverage."""
+        phase = episode_id % 3
+        if phase == 0:
+            return None, None
+
+        prev = [0.0, 0.0, 0.0, 0.0]
+        if phase == 1:
+            return [0.2, 0.0, 0.0, 0.0], prev
+        return [0.0, 0.0, 0.0, 1.0], prev

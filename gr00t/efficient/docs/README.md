@@ -150,3 +150,46 @@ python -m gr00t.efficient.benchmark.run_libero \
   --task debug \
   --output results/efficient_benchmark/day5_libero_vlapruner_mean_abs_mock.json
 ```
+
+## Day 6 SpecPrune + ADP Commands
+Validate:
+```bash
+python -m gr00t.efficient.benchmark.validate_day6_methods \
+  --output results/efficient_benchmark/day6_methods_validation.json
+```
+
+Mock SpecPrune:
+```bash
+python -m gr00t.efficient.benchmark.run_libero \
+  --mock \
+  --method specprune \
+  --keep-ratio 0.75 \
+  --reuse-steps 2 \
+  --visual-token-count 256 \
+  --num-episodes 3 \
+  --task debug \
+  --output results/efficient_benchmark/day6_libero_specprune_mock.json
+```
+
+Mock ADP:
+```bash
+python -m gr00t.efficient.benchmark.run_libero \
+  --mock \
+  --method adp \
+  --visual-token-count 256 \
+  --num-episodes 3 \
+  --task debug \
+  --output results/efficient_benchmark/day6_libero_adp_mock.json
+```
+
+Mock ADP + VLA-Pruner:
+```bash
+python -m gr00t.efficient.benchmark.run_libero \
+  --mock \
+  --method adp_vlapruner \
+  --score-mode norm \
+  --visual-token-count 256 \
+  --num-episodes 3 \
+  --task debug \
+  --output results/efficient_benchmark/day6_libero_adp_vlapruner_mock.json
+```

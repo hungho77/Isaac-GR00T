@@ -1,0 +1,10 @@
+benchmark: LIBERO
+method: specprune
+keep_ratio: 0.75
+score_mode: norm
+reuse_steps: 2
+temporal_momentum: 0.8
+visual_token_count: 256
+num_episodes: 1
+task: debug
+

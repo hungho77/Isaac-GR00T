@@ -8,9 +8,12 @@ from collections.abc import Callable
 from typing import Any
 
 from gr00t.efficient.benchmark.methods import (
+    ADPMethod,
+    ADPVLAPrunerMethod,
     BaselineMethod,
     DummyPruningMethod,
     EfficientInferenceMethod,
+    SpecPruneMethod,
     VLAPrunerMethod,
 )
 
@@ -53,6 +56,9 @@ def _register_default_methods() -> None:
     register_method("baseline", BaselineMethod)
     register_method("dummy", DummyPruningMethod)
     register_method("vlapruner", VLAPrunerMethod)
+    register_method("specprune", SpecPruneMethod)
+    register_method("adp", ADPMethod)
+    register_method("adp_vlapruner", ADPVLAPrunerMethod)
 
 
 _register_default_methods()

@@ -38,6 +38,12 @@ class BenchmarkRecord:
     pruning_method: str = "none"
     score_mode: str = "none"
     effective_keep_ratio: float = 1.0
+    scheduler: str = "none"
+    scheduler_reason: str = ""
+    dynamic_keep_ratio: float | None = None
+    avg_keep_ratio: float | None = None
+    reuse_steps: int | None = None
+    reused_indices: bool | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -62,6 +68,12 @@ RECORD_FIELDS = [
     "pruning_method",
     "score_mode",
     "effective_keep_ratio",
+    "scheduler",
+    "scheduler_reason",
+    "dynamic_keep_ratio",
+    "avg_keep_ratio",
+    "reuse_steps",
+    "reused_indices",
     "action_l2_vs_baseline",
     "failure_type",
     "notes",
@@ -78,6 +90,8 @@ SUMMARY_NUMERIC_FIELDS = [
     "visual_token_count",
     "keep_ratio",
     "effective_keep_ratio",
+    "dynamic_keep_ratio",
+    "avg_keep_ratio",
     "token_reduction_ratio",
     "action_l2_vs_baseline",
 ]

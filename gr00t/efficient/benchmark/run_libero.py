@@ -25,6 +25,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--alpha", type=float, default=0.5)
     parser.add_argument("--beta", type=float, default=0.5)
     parser.add_argument("--temporal-momentum", type=float, default=0.8)
+    parser.add_argument("--reuse-steps", type=int, default=2)
+    parser.add_argument("--default-keep-ratio", type=float, default=0.5)
+    parser.add_argument("--contact-keep-ratio", type=float, default=1.0)
+    parser.add_argument("--move-keep-ratio", type=float, default=0.6)
+    parser.add_argument("--idle-keep-ratio", type=float, default=0.5)
+    parser.add_argument("--action-delta-threshold", type=float, default=0.05)
     parser.add_argument("--visual-token-count", type=int, default=256)
     parser.add_argument("--num-episodes", type=int, default=1)
     parser.add_argument("--task", default="debug")
@@ -38,6 +44,8 @@ def _validate_args(args: argparse.Namespace) -> None:
         raise SystemExit("--num-episodes must be >= 1.")
     if args.visual_token_count < 1:
         raise SystemExit("--visual-token-count must be >= 1.")
+    if args.reuse_steps < 1:
+        raise SystemExit("--reuse-steps must be >= 1.")
 
 
 def _csv_path_for_json(output_path: Path) -> Path | None:
@@ -57,6 +65,12 @@ def _dry_run_result(args: argparse.Namespace, method_metadata: dict[str, object]
         "alpha": args.alpha,
         "beta": args.beta,
         "temporal_momentum": args.temporal_momentum,
+        "reuse_steps": args.reuse_steps,
+        "default_keep_ratio": args.default_keep_ratio,
+        "contact_keep_ratio": args.contact_keep_ratio,
+        "move_keep_ratio": args.move_keep_ratio,
+        "idle_keep_ratio": args.idle_keep_ratio,
+        "action_delta_threshold": args.action_delta_threshold,
         "visual_token_count": args.visual_token_count,
         "num_episodes": args.num_episodes,
         "task": args.task,
@@ -74,6 +88,8 @@ def run_mock_libero_baseline(args: argparse.Namespace, runner: BenchmarkRunner) 
         visual_token_count=args.visual_token_count,
     )
     summary = runner.summarize(records)
+    if "dynamic_keep_ratio" in summary:
+        summary["avg_keep_ratio"] = summary["dynamic_keep_ratio"]
     return {
         "status": "mock_ok",
         "benchmark": "LIBERO",
@@ -85,6 +101,12 @@ def run_mock_libero_baseline(args: argparse.Namespace, runner: BenchmarkRunner) 
         "alpha": args.alpha,
         "beta": args.beta,
         "temporal_momentum": args.temporal_momentum,
+        "reuse_steps": args.reuse_steps,
+        "default_keep_ratio": args.default_keep_ratio,
+        "contact_keep_ratio": args.contact_keep_ratio,
+        "move_keep_ratio": args.move_keep_ratio,
+        "idle_keep_ratio": args.idle_keep_ratio,
+        "action_delta_threshold": args.action_delta_threshold,
         "visual_token_count": args.visual_token_count,
         "num_episodes": args.num_episodes,
         "task": args.task,
@@ -118,6 +140,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             alpha=args.alpha,
             beta=args.beta,
             temporal_momentum=args.temporal_momentum,
+            reuse_steps=args.reuse_steps,
+            default_keep_ratio=args.default_keep_ratio,
+            contact_keep_ratio=args.contact_keep_ratio,
+            move_keep_ratio=args.move_keep_ratio,
+            idle_keep_ratio=args.idle_keep_ratio,
+            action_delta_threshold=args.action_delta_threshold,
         )
     except (KeyError, ValueError) as exc:
         raise SystemExit(str(exc)) from exc

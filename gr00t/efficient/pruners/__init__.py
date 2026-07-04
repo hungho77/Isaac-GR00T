@@ -4,7 +4,8 @@
 
 from gr00t.efficient.pruners.base import VisualTokenPruner
 from gr00t.efficient.pruners.dummy import DummyVisualTokenPruner
+from gr00t.efficient.pruners.specprune import SpecPruneVLA
 from gr00t.efficient.pruners.vlapruner import VLAPruner
 
 
-__all__ = ["DummyVisualTokenPruner", "VLAPruner", "VisualTokenPruner"]
+__all__ = ["DummyVisualTokenPruner", "SpecPruneVLA", "VLAPruner", "VisualTokenPruner"]

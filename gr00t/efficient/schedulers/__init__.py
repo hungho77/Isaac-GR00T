@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Scheduler interfaces for future efficient inference methods."""
 
+from gr00t.efficient.schedulers.adp import ADPScheduler
 from gr00t.efficient.schedulers.base import EfficientInferenceScheduler
 
 
-__all__ = ["EfficientInferenceScheduler"]
-
+__all__ = ["ADPScheduler", "EfficientInferenceScheduler"]
