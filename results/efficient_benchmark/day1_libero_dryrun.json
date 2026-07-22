@@ -1,7 +1,0 @@
-{
-  "benchmark": "LIBERO",
-  "config": "gr00t/efficient/configs/libero_baseline.yaml",
-  "method": "baseline",
-  "keep_ratio": 1.0,
-  "status": "dry_run_ok"
-}

@@ -223,9 +223,22 @@ python -m gr00t.efficient.benchmark.generate_report \
 ## Real LIBERO Evaluation Commands
 LIBERO-Plus is a future eval-only benchmark for robustness. Do not use LIBERO-Plus for training or fine-tuning in this framework.
 
+The in-process real run loads the GR00T model and the LIBERO simulator in one process, so it
+must use the LIBERO sim venv python (created by `bash gr00t/eval/sim/LIBERO/setup_libero.sh`)
+and EGL rendering:
+
+```bash
+LIBERO_PY=gr00t/eval/sim/LIBERO/libero_uv/.venv/bin/python
+```
+
+Always pass `--seed <n>` for real runs: it seeds env init states and (via
+`seed_everything`) the flow-matching action noise, so `action_l2_vs_baseline`
+measures pruning drift instead of sampling noise. Baseline and pruned runs must
+share the same seed.
+
 Real LIBERO baseline:
 ```bash
-python -m gr00t.efficient.benchmark.run_libero \
+MUJOCO_GL=egl $LIBERO_PY -m gr00t.efficient.benchmark.run_libero \
   --method baseline \
   --keep-ratio 1.0 \
   --model-path checkpoints/GR00T-N1.7-LIBERO/libero_10 \
@@ -237,7 +250,7 @@ python -m gr00t.efficient.benchmark.run_libero \
 
 Real DummyPruner:
 ```bash
-python -m gr00t.efficient.benchmark.run_libero \
+MUJOCO_GL=egl $LIBERO_PY -m gr00t.efficient.benchmark.run_libero \
   --method dummy \
   --keep-ratio 0.75 \
   --dummy-mode uniform \
@@ -250,7 +263,7 @@ python -m gr00t.efficient.benchmark.run_libero \
 
 Real VLA-Pruner:
 ```bash
-python -m gr00t.efficient.benchmark.run_libero \
+MUJOCO_GL=egl $LIBERO_PY -m gr00t.efficient.benchmark.run_libero \
   --method vlapruner \
   --keep-ratio 0.75 \
   --score-mode norm \
@@ -259,6 +272,32 @@ python -m gr00t.efficient.benchmark.run_libero \
   --task debug \
   --save-actions \
   --output results/efficient_benchmark/real_libero/day11_vlapruner_keep075_norm_real.json
+```
+
+## Pruning Stages
+`--prune-stage` selects where visual tokens are dropped:
+
+- `action_head` (default): after the backbone forward, before the DiT action head.
+  Safest integration point, but the Qwen3-VL backbone still processes every token,
+  so it cannot reduce latency (Day 11 finding).
+- `backbone`: after an early Qwen3-VL decoder layer (`--prune-layer`, default 3,
+  clamped after the DeepStack injection layers). The remaining decoder layers run
+  on the shortened sequence, which is where the latency lives. Requires
+  batch size 1 (`--n-envs 1`); kept tokens retain their original mrope position ids.
+
+Real VLA-Pruner at the backbone stage:
+```bash
+MUJOCO_GL=egl $LIBERO_PY -m gr00t.efficient.benchmark.run_libero \
+  --method vlapruner \
+  --keep-ratio 0.5 \
+  --score-mode norm \
+  --prune-stage backbone \
+  --model-path checkpoints/GR00T-N1.7-LIBERO/libero_10 \
+  --num-episodes 10 \
+  --task debug \
+  --seed 42 \
+  --save-actions \
+  --output results/efficient_benchmark/real_libero/vlapruner_backbone_kr0p5.json
 ```
 
 If using the original two-terminal server/client baseline, pass `--real-command "<existing rollout command>"` to parse the rollout output into the efficient benchmark schema.

@@ -31,6 +31,9 @@ class VisualTokenHook:
 
         pruned_tokens, metadata = self.method.process_visual_tokens(visual_tokens, **kwargs)
         metadata["hook_enabled"] = self.enabled
+        score_mode = metadata.get("score_mode")
+        if score_mode is not None:
+            metadata["score_mode_effective"] = _effective_score_mode(score_mode, metadata)
         self.last_metadata = metadata
         return pruned_tokens
 
@@ -55,13 +58,14 @@ class VisualTokenHook:
 
         visual_tokens = self._extract_visual_tokens(features, image_mask)
         if visual_tokens is None:
-            pruned_features = self.apply(features, **kwargs)
-            _set_feature(backbone_output, "backbone_features", pruned_features)
-            selected_indices = _selected_indices(self.method)
-            if selected_indices is not None:
-                _set_feature(backbone_output, "backbone_attention_mask", _gather_mask(attention_mask, selected_indices))
-                _set_feature(backbone_output, "image_mask", _gather_mask(image_mask, selected_indices))
-            self.last_metadata["hook_scope"] = "backbone_features"
+            # Never prune the full sequence: it would drop text/state tokens. Skip instead.
+            self.last_metadata = {
+                "method": getattr(self.method, "method_name", "none"),
+                "pruning_method": "none",
+                "pruned": False,
+                "hook_enabled": self.enabled,
+                "hook_error": "visual_tokens_not_isolated",
+            }
             return backbone_output
 
         _ = self.apply(visual_tokens, **kwargs)
@@ -76,11 +80,15 @@ class VisualTokenHook:
             return backbone_output
 
         _set_feature(backbone_output, "backbone_features", gather_tokens(features, full_indices))
-        _set_feature(backbone_output, "backbone_attention_mask", _gather_mask(attention_mask, full_indices))
+        _set_feature(
+            backbone_output, "backbone_attention_mask", _gather_mask(attention_mask, full_indices)
+        )
         _set_feature(backbone_output, "image_mask", _gather_mask(image_mask, full_indices))
         self.last_metadata["hook_scope"] = "visual_tokens_only"
         self.last_metadata["full_token_count_before"] = int(features.shape[1])
-        self.last_metadata["full_token_count_after"] = int(_get_feature(backbone_output, "backbone_features").shape[1])
+        self.last_metadata["full_token_count_after"] = int(
+            _get_feature(backbone_output, "backbone_features").shape[1]
+        )
         return backbone_output
 
     def _extract_visual_tokens(self, features: Any, image_mask: Any | None) -> Any | None:
@@ -105,7 +113,9 @@ class VisualTokenHook:
         if torch is None or image_mask is None or not isinstance(image_mask, torch.Tensor):
             return None
 
-        selected = torch.as_tensor(selected_visual_indices, dtype=torch.long, device=image_mask.device)
+        selected = torch.as_tensor(
+            selected_visual_indices, dtype=torch.long, device=image_mask.device
+        )
         if selected.dim() == 1:
             selected = selected.unsqueeze(0).expand(image_mask.shape[0], -1)
         if selected.dim() != 2 or selected.shape[0] != image_mask.shape[0]:
@@ -116,7 +126,9 @@ class VisualTokenHook:
             visual_positions = torch.nonzero(image_mask[batch_idx], as_tuple=False).flatten()
             non_visual_positions = torch.nonzero(~image_mask[batch_idx], as_tuple=False).flatten()
             kept_visual_positions = visual_positions[selected[batch_idx]]
-            merged = torch.sort(torch.cat((non_visual_positions, kept_visual_positions), dim=0)).values
+            merged = torch.sort(
+                torch.cat((non_visual_positions, kept_visual_positions), dim=0)
+            ).values
             full_indices.append(merged)
         return torch.stack(full_indices, dim=0)
 
@@ -155,6 +167,15 @@ def _set_feature(batch_feature: Any, key: str, value: Any) -> None:
         batch_feature[key] = value
     else:
         setattr(batch_feature, key, value)
+
+
+def _effective_score_mode(score_mode: str, metadata: dict[str, Any]) -> str:
+    """Resolve the score mode actually used after silent pruner fallbacks."""
+    if score_mode == "attention" and not metadata.get("used_attention", False):
+        return "norm"
+    if score_mode == "action" and not metadata.get("used_action_score", False):
+        return "norm"
+    return score_mode
 
 
 def _selected_indices(method: Any) -> Any | None:

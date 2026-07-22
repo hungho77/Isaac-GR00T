@@ -325,22 +325,34 @@ class SpecPruneMethod(EfficientInferenceMethod):
             seed=seed,
         )
         self.last_pruning_metadata: dict[str, Any] | None = None
+        # No caller currently threads an explicit `timestep` through any of the
+        # three hooks (after_visual_merger / backbone / action_head), so without
+        # this counter `_should_reuse()` always sees `timestep=None` and the
+        # cached-index reuse this method exists for never activates. Track calls
+        # since the last reset() as the timestep when the caller doesn't supply one.
+        self._timestep = 0
 
     def reset(self) -> None:
         self.pruner.reset()
         self.last_pruning_metadata = None
+        self._timestep = 0
 
     def process_visual_tokens(
         self,
         visual_tokens: Any,
         **kwargs: Any,
     ) -> tuple[Any, dict[str, Any]]:
+        timestep = kwargs.get("timestep")
+        if timestep is None:
+            timestep = self._timestep
+        self._timestep += 1
+
         pruned_tokens, pruner_metadata = self.pruner.prune(
             visual_tokens,
             attention=kwargs.get("attention"),
             robot_state=kwargs.get("robot_state"),
             action_state=kwargs.get("action_state"),
-            timestep=kwargs.get("timestep"),
+            timestep=timestep,
         )
         metadata = {
             "method": self.method_name,
@@ -351,6 +363,7 @@ class SpecPruneMethod(EfficientInferenceMethod):
             "token_reduction_ratio": pruner_metadata.get("token_reduction_ratio"),
             "original_tokens": pruner_metadata.get("original_tokens"),
             "kept_tokens": pruner_metadata.get("kept_tokens"),
+            "timestep": timestep,
             "reuse_steps": pruner_metadata.get("reuse_steps"),
             "reused_indices": pruner_metadata.get("reused_indices"),
             "pruning_enabled": True,
@@ -360,7 +373,8 @@ class SpecPruneMethod(EfficientInferenceMethod):
             {
                 key: value
                 for key, value in kwargs.items()
-                if key not in {"attention", "robot_state", "action_state"} and value is not None
+                if key not in {"attention", "robot_state", "action_state", "timestep"}
+                and value is not None
             }
         )
         metadata["pruner_metadata"] = pruner_metadata
@@ -408,10 +422,20 @@ class ADPMethod(EfficientInferenceMethod):
             action_delta_threshold=action_delta_threshold,
         )
         self.last_pruning_metadata: dict[str, Any] | None = None
+        # Every hook (visual_token_hook.py, backbone_token_hook.py,
+        # visual_merger_hook.py) resolves which tokens to actually gather/mask
+        # by checking method.pruner/method.vlapruner, falling back to
+        # method.last_selected_indices directly. ADP creates a fresh, keep-ratio
+        # -specific DummyVisualTokenPruner every call rather than keeping one
+        # persistent self.pruner, so without this it's never discovered --
+        # every real run silently no-ops (hook_error="missing_selected_indices"),
+        # regardless of dynamic_keep_ratio.
+        self.last_selected_indices: Any | None = None
 
     def reset(self) -> None:
         self.scheduler.reset()
         self.last_pruning_metadata = None
+        self.last_selected_indices = None
 
     def process_visual_tokens(
         self,
@@ -434,6 +458,7 @@ class ADPMethod(EfficientInferenceMethod):
             visual_tokens,
             timestep=kwargs.get("timestep"),
         )
+        self.last_selected_indices = pruner.last_selected_indices
         metadata = self._build_adp_metadata(
             pruner_metadata=pruner_metadata,
             scheduler_metadata=scheduler_metadata,
@@ -459,9 +484,7 @@ class ADPMethod(EfficientInferenceMethod):
         original_tokens = pruner_metadata.get("original_tokens")
         kept_tokens = pruner_metadata.get("kept_tokens")
         token_reduction_ratio = (
-            0.0
-            if not original_tokens
-            else 1.0 - (float(kept_tokens) / float(original_tokens))
+            0.0 if not original_tokens else 1.0 - (float(kept_tokens) / float(original_tokens))
         )
         return {
             "method": self.method_name,

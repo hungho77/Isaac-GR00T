@@ -91,7 +91,9 @@ class VLAPruner(VisualTokenPruner):
 
         used_temporal_smoothing = False
         if self.prev_score is not None and tuple(self.prev_score.shape) == tuple(score.shape):
-            score = self.temporal_momentum * self.prev_score + (1.0 - self.temporal_momentum) * score
+            score = (
+                self.temporal_momentum * self.prev_score + (1.0 - self.temporal_momentum) * score
+            )
             used_temporal_smoothing = True
 
         topk_indices = torch.topk(score, k=keep, dim=1, largest=True, sorted=False).indices
@@ -100,7 +102,11 @@ class VLAPruner(VisualTokenPruner):
         output_shape = self._validate_visual_tokens(pruned_tokens)
 
         self.prev_score = score.detach()
-        self.last_selected_indices = selected_indices.detach().cpu()
+        # Keep indices on-device: a .cpu() here would force a GPU sync per inference step.
+        self.last_selected_indices = selected_indices.detach()
+        preview = (
+            selected_indices[0, :16].tolist() if selected_indices.device.type == "cpu" else None
+        )
         metadata = self._metadata(
             original_tokens=original_tokens,
             kept_tokens=keep,
@@ -112,7 +118,7 @@ class VLAPruner(VisualTokenPruner):
             used_action_score=score_metadata["used_action_score"],
             used_temporal_smoothing=used_temporal_smoothing,
             selected_indices_shape=list(selected_indices.shape),
-            selected_indices_preview=selected_indices[0, :16].detach().cpu().tolist(),
+            selected_indices_preview=preview,
         )
         self.last_metadata = metadata
         return pruned_tokens, metadata
@@ -167,7 +173,9 @@ class VLAPruner(VisualTokenPruner):
             "used_action_score": used_action_score,
         }
 
-    def _semantic_score(self, visual_tokens: Any, attention: Any | None, torch: Any) -> tuple[Any, bool]:
+    def _semantic_score(
+        self, visual_tokens: Any, attention: Any | None, torch: Any
+    ) -> tuple[Any, bool]:
         if self.score_mode == "mean_abs":
             return torch.mean(torch.abs(visual_tokens.float()), dim=-1), False
 
@@ -221,7 +229,9 @@ class VLAPruner(VisualTokenPruner):
         elif state.dim() == 2 and state.shape[-1] == hidden_dim:
             if state.shape[0] not in (1, batch_size):
                 return None
-            state = state.view(state.shape[0], 1, hidden_dim).expand(batch_size, num_tokens, hidden_dim)
+            state = state.view(state.shape[0], 1, hidden_dim).expand(
+                batch_size, num_tokens, hidden_dim
+            )
         elif state.dim() == 3 and state.shape[-1] == hidden_dim:
             if state.shape[0] not in (1, batch_size):
                 return None
@@ -280,4 +290,3 @@ def _torch_or_none() -> Any | None:
     except Exception:
         return None
     return torch
-

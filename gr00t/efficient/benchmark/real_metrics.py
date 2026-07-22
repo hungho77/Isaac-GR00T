@@ -78,6 +78,12 @@ def finish_episode_record(
     latencies = list(action_latencies_ms or [])
     if latencies:
         record["latency_per_action_ms"] = sum(latencies) / len(latencies)
+        # Median is robust to one-time warmup outliers (e.g. torch.compile on first actions).
+        ordered = sorted(latencies)
+        mid = len(ordered) // 2
+        record["latency_per_action_ms_median"] = (
+            ordered[mid] if len(ordered) % 2 else (ordered[mid - 1] + ordered[mid]) / 2.0
+        )
 
     memory = get_cuda_memory_stats()
     record["gpu_memory_mb"] = float(memory.get("gpu_memory_mb", memory.get("allocated_mb", 0.0)))
@@ -98,8 +104,17 @@ def finish_episode_record(
             "token_reduction_ratio",
             0.0 if not before else 1.0 - (float(after) / float(before)),
         )
-        record["pruning_method"] = visual_metadata.get("pruning_method", visual_metadata.get("method", "none"))
+        record["pruning_method"] = visual_metadata.get(
+            "pruning_method", visual_metadata.get("method", "none")
+        )
         record["score_mode"] = visual_metadata.get("score_mode", "none")
+        record["score_mode_effective"] = visual_metadata.get(
+            "score_mode_effective", record["score_mode"]
+        )
+        record["used_attention"] = visual_metadata.get("used_attention", False)
+        record["used_action_score"] = visual_metadata.get("used_action_score", False)
+        if "hook_error" in visual_metadata:
+            record["hook_error"] = visual_metadata["hook_error"]
     elif record["keep_ratio"] == 1.0:
         record["effective_keep_ratio"] = 1.0
         record["token_reduction_ratio"] = 0.0
@@ -122,6 +137,7 @@ def compute_episode_summary(records: Iterable[dict[str, Any]]) -> dict[str, Any]
     numeric_fields = [
         "success_rate",
         "latency_per_action_ms",
+        "latency_per_action_ms_median",
         "episode_time_s",
         "gpu_memory_mb",
         "peak_gpu_memory_mb",
@@ -137,14 +153,17 @@ def compute_episode_summary(records: Iterable[dict[str, Any]]) -> dict[str, Any]
         values = [
             float(record[field])
             for record in rows
-            if isinstance(record.get(field), (int, float)) and not isinstance(record.get(field), bool)
+            if isinstance(record.get(field), (int, float))
+            and not isinstance(record.get(field), bool)
         ]
         if values:
             summary[field] = sum(values) / len(values)
     return summary
 
 
-def save_action_trace(path: str | Path, actions: Iterable[Any], metadata: dict[str, Any] | None = None) -> None:
+def save_action_trace(
+    path: str | Path, actions: Iterable[Any], metadata: dict[str, Any] | None = None
+) -> None:
     """Save an action trace as NPZ plus small JSON metadata sidecar."""
     import numpy as np
 
@@ -182,10 +201,7 @@ def compute_action_l2_trace(current_trace: Iterable[Any], baseline_trace: Iterab
             continue
         distances.append(
             math.sqrt(
-                sum(
-                    (current_values[idx] - baseline_values[idx]) ** 2
-                    for idx in range(length)
-                )
+                sum((current_values[idx] - baseline_values[idx]) ** 2 for idx in range(length))
             )
         )
     if not distances:

@@ -1,12 +1,14 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
-"""Run a unified mock comparison across efficient inference methods."""
+"""Run a unified comparison (mock or real LIBERO) across efficient inference methods."""
 
 from __future__ import annotations
 
 import argparse
 import json
 from pathlib import Path
+import subprocess
+import sys
 from typing import Any, Sequence
 
 from gr00t.efficient.benchmark.metrics import (
@@ -36,13 +38,45 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--methods", default=DEFAULT_METHODS)
     parser.add_argument("--keep-ratios", default=DEFAULT_KEEP_RATIOS)
     parser.add_argument("--dummy-mode", default="first", choices=["first", "uniform", "random"])
-    parser.add_argument("--score-mode", default="norm", choices=["norm", "mean_abs", "attention", "action"])
+    parser.add_argument(
+        "--score-mode", default="norm", choices=["norm", "mean_abs", "attention", "action"]
+    )
+    parser.add_argument("--alpha", type=float, default=0.5)
+    parser.add_argument("--beta", type=float, default=0.5)
+    parser.add_argument("--temporal-momentum", type=float, default=0.8)
     parser.add_argument("--reuse-steps", type=int, default=2)
     parser.add_argument("--default-keep-ratio", type=float, default=0.5)
     parser.add_argument("--contact-keep-ratio", type=float, default=1.0)
     parser.add_argument("--move-keep-ratio", type=float, default=0.6)
     parser.add_argument("--idle-keep-ratio", type=float, default=0.5)
     parser.add_argument("--action-delta-threshold", type=float, default=0.05)
+
+    # Real-LIBERO-only options (ignored in --mock). Each (method, keep_ratio)
+    # combination is run as a separate `run_libero.py` subprocess -- one fresh
+    # model load per run -- so no pruning hook, torch.compile, or method state
+    # from one method can leak into the next.
+    parser.add_argument(
+        "--model-path", default="", help="Real checkpoint path; required unless --mock."
+    )
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--max-steps", type=int, default=720)
+    parser.add_argument("--n-action-steps", type=int, default=8)
+    parser.add_argument(
+        "--prune-stage",
+        default="backbone",
+        choices=["action_head", "backbone", "after_visual_merger"],
+    )
+    parser.add_argument("--prune-mode", default="gather", choices=["gather", "mask_only"])
+    parser.add_argument("--prune-layer", type=int, default=3)
+    parser.add_argument("--torch-compile", action="store_true")
+    parser.add_argument(
+        "--compile-mode",
+        default="reduce-overhead",
+        choices=["default", "reduce-overhead", "max-autotune"],
+    )
+    parser.add_argument("--profile-stages", action="store_true")
+    parser.add_argument("--save-actions", action="store_true")
+    parser.add_argument("--video-dir", default=None)
     return parser
 
 
@@ -67,7 +101,9 @@ def _ratio_suffix(keep_ratio: float) -> str:
     return f"{keep_ratio:.3g}".replace(".", "p")
 
 
-def _planned_runs(methods: list[str], keep_ratios: list[float], explicit_ratios: bool) -> list[tuple[str, float]]:
+def _planned_runs(
+    methods: list[str], keep_ratios: list[float], explicit_ratios: bool
+) -> list[tuple[str, float]]:
     runs: list[tuple[str, float]] = []
     for method in methods:
         if method == "baseline":
@@ -84,7 +120,9 @@ def _planned_runs(methods: list[str], keep_ratios: list[float], explicit_ratios:
     return runs
 
 
-def _build_method_kwargs(args: argparse.Namespace, method_name: str, keep_ratio: float) -> dict[str, Any]:
+def _build_method_kwargs(
+    args: argparse.Namespace, method_name: str, keep_ratio: float
+) -> dict[str, Any]:
     kwargs = {
         "keep_ratio": keep_ratio,
         "mode": args.dummy_mode,
@@ -152,19 +190,135 @@ def _run_one_mock(
 
 
 def _record_dicts(records: list[BenchmarkRecord]) -> list[dict[str, Any]]:
-    return [record.to_dict() if isinstance(record, BenchmarkRecord) else dict(record) for record in records]
+    return [
+        record.to_dict() if isinstance(record, BenchmarkRecord) else dict(record)
+        for record in records
+    ]
+
+
+def _real_run_argv(
+    args: argparse.Namespace, method_name: str, keep_ratio: float, json_path: Path
+) -> list[str]:
+    """Build the run_libero.py argv for one (method, keep_ratio) real LIBERO run."""
+    argv = [
+        "--method",
+        method_name,
+        "--keep-ratio",
+        str(keep_ratio),
+        "--model-path",
+        args.model_path,
+        "--num-episodes",
+        str(args.num_episodes),
+        "--task",
+        args.task,
+        "--seed",
+        str(args.seed),
+        "--max-steps",
+        str(args.max_steps),
+        "--n-action-steps",
+        str(args.n_action_steps),
+        "--dummy-mode",
+        args.dummy_mode,
+        "--score-mode",
+        args.score_mode,
+        "--alpha",
+        str(args.alpha),
+        "--beta",
+        str(args.beta),
+        "--temporal-momentum",
+        str(args.temporal_momentum),
+        "--reuse-steps",
+        str(args.reuse_steps),
+        "--default-keep-ratio",
+        str(args.default_keep_ratio),
+        "--contact-keep-ratio",
+        str(args.contact_keep_ratio),
+        "--move-keep-ratio",
+        str(args.move_keep_ratio),
+        "--idle-keep-ratio",
+        str(args.idle_keep_ratio),
+        "--action-delta-threshold",
+        str(args.action_delta_threshold),
+        "--prune-stage",
+        args.prune_stage,
+        "--prune-mode",
+        args.prune_mode,
+        "--prune-layer",
+        str(args.prune_layer),
+        "--compile-mode",
+        args.compile_mode,
+        "--real-output-dir",
+        str(json_path.parent),
+        "--output",
+        str(json_path),
+    ]
+    if args.torch_compile:
+        argv.append("--torch-compile")
+    if args.profile_stages:
+        argv.append("--profile-stages")
+    if args.save_actions:
+        argv.append("--save-actions")
+    if args.video_dir:
+        argv.extend(
+            ["--video-dir", f"{args.video_dir}/{method_name}_kr{_ratio_suffix(keep_ratio)}"]
+        )
+    return argv
+
+
+def _run_one_real(
+    args: argparse.Namespace,
+    method_name: str,
+    keep_ratio: float,
+    output_dir: Path,
+) -> dict[str, Any]:
+    """Run one (method, keep_ratio) real LIBERO evaluation as a run_libero.py subprocess.
+
+    Each combination gets its own process (and therefore its own fresh model
+    load): pruning hooks monkey-patch model instance methods and torch.compile
+    caches Dynamo state per-process, so reusing one loaded model across methods
+    risks one method's hook or compiled graph silently leaking into the next.
+    """
+    if method_name in DYNAMIC_METHODS:
+        run_id = f"{args.benchmark.lower()}_{method_name}_dynamic_real"
+    else:
+        run_id = f"{args.benchmark.lower()}_{method_name}_kr{_ratio_suffix(keep_ratio)}_real"
+
+    json_path = output_dir / f"{run_id}.json"
+    argv = _real_run_argv(args, method_name, keep_ratio, json_path)
+    completed = subprocess.run(
+        [sys.executable, "-m", "gr00t.efficient.benchmark.run_libero", *argv],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError(
+            f"Real LIBERO run failed for method={method_name!r} keep_ratio={keep_ratio}:\n"
+            f"{completed.stdout[-4000:]}\n{completed.stderr[-4000:]}"
+        )
+
+    with json_path.open("r", encoding="utf-8") as handle:
+        result = json.load(handle)
+
+    return {
+        "run_id": run_id,
+        "json_output": str(json_path),
+        "csv_output": result.get("csv_output"),
+        "method": method_name,
+        "keep_ratio": keep_ratio,
+        "summary": result.get("summary", {}),
+        "stage_profile": result.get("stage_profile"),
+        "records": result.get("records", []),
+    }
 
 
 def run_comparison(args: argparse.Namespace) -> dict[str, Any]:
-    if not args.mock:
-        raise NotImplementedError(
-            "run_comparison currently supports --mock only. Real LIBERO/LIBERO-Plus execution "
-            "must connect run_libero.py or run_libero_plus.py to the evaluation entrypoint first."
-        )
     if args.num_episodes < 1:
         raise ValueError("--num-episodes must be >= 1.")
-    if args.visual_token_count < 1:
+    if not args.mock and args.visual_token_count < 1:
         raise ValueError("--visual-token-count must be >= 1.")
+    if not args.mock and not args.model_path:
+        raise ValueError("--model-path is required for a real LIBERO comparison (or pass --mock).")
 
     methods = _parse_csv_names(args.methods)
     keep_ratios = _parse_keep_ratios(args.keep_ratios)
@@ -175,9 +329,12 @@ def run_comparison(args: argparse.Namespace) -> dict[str, Any]:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     run_results: list[dict[str, Any]] = []
-    combined_records: list[BenchmarkRecord] = []
+    combined_records: list[Any] = []
     for method_name, keep_ratio in runs:
-        run_result = _run_one_mock(args, method_name, keep_ratio, output_dir)
+        if args.mock:
+            run_result = _run_one_mock(args, method_name, keep_ratio, output_dir)
+        else:
+            run_result = _run_one_real(args, method_name, keep_ratio, output_dir)
         run_results.append({key: value for key, value in run_result.items() if key != "records"})
         combined_records.extend(run_result["records"])
 
@@ -189,7 +346,7 @@ def run_comparison(args: argparse.Namespace) -> dict[str, Any]:
     combined_json = output_dir / "comparison_summary.json"
     write_csv(combined_csv, combined_records)
     result = {
-        "status": "mock_ok",
+        "status": "mock_ok" if args.mock else "real_ok",
         "benchmark": args.benchmark,
         "task": args.task,
         "num_episodes": args.num_episodes,
@@ -211,7 +368,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         result = run_comparison(args)
-    except (KeyError, ValueError, NotImplementedError) as exc:
+    except (KeyError, ValueError, RuntimeError) as exc:
         raise SystemExit(str(exc)) from exc
     print(json.dumps(result, indent=2))
     return 0

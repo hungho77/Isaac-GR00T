@@ -16,13 +16,17 @@ from gr00t.efficient.benchmark.runner import BenchmarkRunner
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Run LIBERO efficient inference benchmark scaffold.")
+    parser = argparse.ArgumentParser(
+        description="Run LIBERO efficient inference benchmark scaffold."
+    )
     parser.add_argument("--config", default="gr00t/efficient/configs/libero_baseline.yaml")
     parser.add_argument("--output", default="results/efficient_benchmark/libero_result.json")
     parser.add_argument("--method", default="baseline")
     parser.add_argument("--keep-ratio", type=float, default=1.0)
     parser.add_argument("--dummy-mode", default="first", choices=["first", "uniform", "random"])
-    parser.add_argument("--score-mode", default="norm", choices=["norm", "mean_abs", "attention", "action"])
+    parser.add_argument(
+        "--score-mode", default="norm", choices=["norm", "mean_abs", "attention", "action"]
+    )
     parser.add_argument("--alpha", type=float, default=0.5)
     parser.add_argument("--beta", type=float, default=0.5)
     parser.add_argument("--temporal-momentum", type=float, default=0.8)
@@ -55,6 +59,58 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--libero-python", default="")
     parser.add_argument("--hook-visual-tokens", action="store_true")
     parser.add_argument("--disable-visual-token-hook", action="store_true")
+    parser.add_argument(
+        "--prune-stage",
+        default="action_head",
+        choices=["action_head", "backbone", "after_visual_merger"],
+        help=(
+            "Where to prune visual tokens: 'action_head' (after the backbone; no latency win), "
+            "'backbone' (after an early Qwen3-VL decoder layer; reduces LLM compute), or "
+            "'after_visual_merger' (right after the Qwen3-VL vision merger, before the LLM; "
+            "mask-only only -- gather is unsafe at this point, see visual_merger_hook.py)."
+        ),
+    )
+    parser.add_argument(
+        "--prune-mode",
+        default="gather",
+        choices=["gather", "mask_only"],
+        help=(
+            "'gather' physically shortens the token sequence (backbone/action_head stages only). "
+            "'mask_only' zeros low-score tokens without changing shape (required for "
+            "after_visual_merger; optional experiment for the other stages)."
+        ),
+    )
+    parser.add_argument(
+        "--prune-layer",
+        type=int,
+        default=3,
+        help="Decoder layer index after which backbone-stage pruning happens (clamped after DeepStack).",
+    )
+    parser.add_argument(
+        "--torch-compile",
+        action="store_true",
+        help=(
+            "torch.compile the DiT action head and vision tower to collapse kernel-launch "
+            "overhead. First actions are slow (compilation); compare median latency."
+        ),
+    )
+    parser.add_argument(
+        "--compile-mode",
+        default="reduce-overhead",
+        choices=["default", "reduce-overhead", "max-autotune"],
+        help="torch.compile mode; reduce-overhead uses CUDA graphs (best for batch-1 inference).",
+    )
+    parser.add_argument(
+        "--profile-stages",
+        action="store_true",
+        help=(
+            "Instrument per-stage latency (vision encoder, visual merger, LLM backbone, "
+            "DiT action head) via gr00t.efficient.profiler.model_stages and add a "
+            "`stage_profile` block to the output JSON. Real runs only (--model-path); "
+            "attaches after any pruning hook so backbone-stage pruning's patched LLM "
+            "forward is still timed, not silently skipped."
+        ),
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--mock", action="store_true")
     return parser
@@ -73,6 +129,8 @@ def _validate_args(args: argparse.Namespace) -> None:
         raise SystemExit("--n-envs must be >= 1.")
     if args.n_action_steps < 1:
         raise SystemExit("--n-action-steps must be >= 1.")
+    if args.prune_layer < 0:
+        raise SystemExit("--prune-layer must be >= 0.")
 
 
 def _csv_path_for_json(output_path: Path) -> Path | None:
@@ -81,7 +139,9 @@ def _csv_path_for_json(output_path: Path) -> Path | None:
     return None
 
 
-def _dry_run_result(args: argparse.Namespace, method_metadata: dict[str, object]) -> dict[str, object]:
+def _dry_run_result(
+    args: argparse.Namespace, method_metadata: dict[str, object]
+) -> dict[str, object]:
     return {
         "benchmark": "LIBERO",
         "config": args.config,
@@ -116,7 +176,9 @@ def _dry_run_result(args: argparse.Namespace, method_metadata: dict[str, object]
     }
 
 
-def run_mock_libero_baseline(args: argparse.Namespace, runner: BenchmarkRunner) -> dict[str, object]:
+def run_mock_libero_baseline(
+    args: argparse.Namespace, runner: BenchmarkRunner
+) -> dict[str, object]:
     """Create deterministic baseline records without importing LIBERO."""
     records = runner.run_mock(
         num_episodes=args.num_episodes,
@@ -158,12 +220,14 @@ def run_real_libero_baseline(method: object, args: argparse.Namespace) -> dict[s
     records = adapter.run()
     runner = BenchmarkRunner(benchmark_name="LIBERO", method=method)
     summary = runner.summarize(records)
-    return {
+    result: dict[str, object] = {
         "status": "real_ok",
         "benchmark": "LIBERO",
         "config": args.config,
         "method": getattr(method, "method_name", args.method),
         "keep_ratio": getattr(method, "keep_ratio", args.keep_ratio),
+        "prune_stage": args.prune_stage,
+        "prune_layer": args.prune_layer,
         "suite": args.suite,
         "task": args.task,
         "num_episodes": args.num_episodes,
@@ -174,6 +238,9 @@ def run_real_libero_baseline(method: object, args: argparse.Namespace) -> dict[s
         "summary": summary,
         "records": records,
     }
+    if adapter.last_stage_profile is not None:
+        result["stage_profile"] = adapter.last_stage_profile
+    return result
 
 
 def main(argv: Sequence[str] | None = None) -> int:

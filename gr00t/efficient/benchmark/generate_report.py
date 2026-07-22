@@ -19,6 +19,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--summary-csv", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--title", default=DEFAULT_TITLE)
+    parser.add_argument(
+        "--mode",
+        default="mock",
+        choices=["mock", "real"],
+        help="Whether --summary-csv came from a --mock or a real LIBERO run_comparison.py run; "
+        "only changes the Scope/Blockers wording, not the numbers.",
+    )
     return parser
 
 
@@ -71,66 +78,87 @@ def _numeric_rows(rows: list[dict[str, Any]], field: str) -> list[dict[str, Any]
     return [row for row in rows if isinstance(row.get(field), float)]
 
 
-def _observations(rows: list[dict[str, Any]]) -> list[str]:
+def _observations(rows: list[dict[str, Any]], real: bool = False) -> list[str]:
+    tag = "real" if real else "mock"
     observations: list[str] = []
     latency_rows = _numeric_rows(rows, "mean_latency_per_action_ms")
     l2_rows = _numeric_rows(rows, "mean_action_l2_vs_baseline")
     reduction_rows = _numeric_rows(rows, "mean_token_reduction_ratio")
     speedup_rows = _numeric_rows(rows, "speedup_vs_baseline")
+    success_rows = _numeric_rows(rows, "mean_success_rate")
 
     if latency_rows:
         fastest = min(latency_rows, key=lambda row: row["mean_latency_per_action_ms"])
         observations.append(
-            f"- Fastest method in mock: `{fastest['method']}` at "
+            f"- Fastest method in {tag}: `{fastest['method']}` at "
             f"{_fmt(fastest['mean_latency_per_action_ms'])} ms/action."
+        )
+    if real and success_rows:
+        lowest_sr = min(success_rows, key=lambda row: row["mean_success_rate"])
+        observations.append(
+            f"- Lowest success rate: `{lowest_sr['method']}` at "
+            f"{_fmt(lowest_sr['mean_success_rate'])} ({_fmt(lowest_sr.get('num_records'), 0)} episodes)."
         )
     if l2_rows:
         lowest_l2 = min(l2_rows, key=lambda row: row["mean_action_l2_vs_baseline"])
         observations.append(
-            f"- Lowest action L2 in mock: `{lowest_l2['method']}` at "
+            f"- Lowest action L2 in {tag}: `{lowest_l2['method']}` at "
             f"{_fmt(lowest_l2['mean_action_l2_vs_baseline'])}."
         )
     if reduction_rows:
         best_reduction = max(reduction_rows, key=lambda row: row["mean_token_reduction_ratio"])
         observations.append(
-            f"- Best token reduction in mock: `{best_reduction['method']}` at "
+            f"- Best token reduction in {tag}: `{best_reduction['method']}` at "
             f"{_fmt(best_reduction['mean_token_reduction_ratio'])}."
         )
     if speedup_rows:
         best_speedup = max(speedup_rows, key=lambda row: row["speedup_vs_baseline"])
         achieved = best_speedup["speedup_vs_baseline"] >= 1.2
         observations.append(
-            "- Mock speedup >= 1.2x: "
+            f"- {tag.capitalize()} speedup >= 1.2x: "
             f"{'yes' if achieved else 'no'}; best was `{best_speedup['method']}` at "
             f"{_fmt(best_speedup['speedup_vs_baseline'])}x."
         )
     if l2_rows:
         max_l2 = max(row["mean_action_l2_vs_baseline"] for row in l2_rows)
         observations.append(
-            "- Action L2 remains low in mock: "
+            f"- Action L2 remains low in {tag}: "
             f"{'yes' if max_l2 <= 0.01 else 'review needed'}; max was {_fmt(max_l2)}."
         )
     return observations
 
 
-def generate_report(summary_csv: str | Path, output: str | Path, title: str = DEFAULT_TITLE) -> str:
+def generate_report(
+    summary_csv: str | Path,
+    output: str | Path,
+    title: str = DEFAULT_TITLE,
+    mode: str = "mock",
+) -> str:
     rows = _read_summary(summary_csv)
     methods_seen = {str(row.get("method")) for row in rows}
     missing_methods = [method for method in METHODS if method not in methods_seen]
+    is_real = mode == "real"
+    scope_label = "Real GR00T N1.7 checkpoint + real LIBERO env" if is_real else "Mock LIBERO"
 
     lines = [
         f"# {title}",
         "",
         "## Scope",
-        "- Mock LIBERO comparison.",
-        "- Methods tested: " + ", ".join(f"`{method}`" for method in METHODS if method in methods_seen) + ".",
+        f"- {scope_label} comparison.",
+        "- Methods tested: "
+        + ", ".join(f"`{method}`" for method in METHODS if method in methods_seen)
+        + ".",
         "- Metrics: success rate, latency, episode time, GPU memory, visual tokens, keep ratio, token reduction, and action L2.",
         "",
         "## Methods",
     ]
     lines.extend(f"- `{method}`" for method in METHODS)
     if missing_methods:
-        lines.append("- Missing from summary: " + ", ".join(f"`{method}`" for method in missing_methods) + ".")
+        lines.append(
+            "- Missing from summary: "
+            + ", ".join(f"`{method}`" for method in missing_methods)
+            + "."
+        )
 
     lines.extend(
         [
@@ -141,24 +169,37 @@ def generate_report(summary_csv: str | Path, output: str | Path, title: str = DE
             "## Key Observations",
         ]
     )
-    observations = _observations(rows)
+    observations = _observations(rows, real=is_real)
     lines.extend(observations or ["- No numeric summary rows were available."])
-    lines.extend(
-        [
-            "",
-            "## Blockers",
-            "- Real LIBERO is not connected yet unless discovered otherwise.",
-            "- Real GR00T visual token/action-state hooks are not connected yet.",
-            "- Mock metrics are for pipeline validation only.",
-            "",
-            "## Recommendation",
-            "- Next: connect real LIBERO baseline.",
-            "- Then: connect real visual token hook.",
-            "- Then: evaluate VLA-Pruner on real episodes.",
-            "- Then: run LIBERO-Plus robustness benchmark.",
-            "",
-        ]
-    )
+    if is_real:
+        lines.extend(
+            [
+                "",
+                "## Blockers",
+                "- None: this is a real checkpoint + real LIBERO comparison, not a pipeline mock.",
+                "",
+                "## Recommendation",
+                "- Treat single-digit-episode runs as smoke tests only; re-confirm any "
+                "promising method/keep_ratio at n>=50-100 before trusting SR or latency deltas.",
+                "- If speed is the goal, `--torch-compile` on the DiT action head is the only "
+                "lever this framework has confirmed moves latency; token pruning has not, "
+                "at any keep_ratio, layer, or hook (see day15/day19 audit reports).",
+                "",
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                "",
+                "## Blockers",
+                "- Real LIBERO is not connected in this run (pass without --mock to use it).",
+                "- Mock metrics are for pipeline validation only, not real SR/latency claims.",
+                "",
+                "## Recommendation",
+                "- Next: run this same comparison with --model-path set (real LIBERO) instead of --mock.",
+                "",
+            ]
+        )
 
     report = "\n".join(lines)
     output_path = Path(output)
@@ -169,7 +210,9 @@ def generate_report(summary_csv: str | Path, output: str | Path, title: str = DE
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    generate_report(summary_csv=args.summary_csv, output=args.output, title=args.title)
+    generate_report(
+        summary_csv=args.summary_csv, output=args.output, title=args.title, mode=args.mode
+    )
     print(str(args.output))
     return 0
 

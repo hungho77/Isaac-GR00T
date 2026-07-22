@@ -40,11 +40,17 @@ class SpecPruneVLA(VisualTokenPruner):
         self.seed = seed
         self.prev_score: Any | None = None
         self.cached_indices: Any | None = None
+        # Hooks (visual_token_hook.py, backbone_token_hook.py, visual_merger_hook.py)
+        # all read `last_selected_indices` (the convention VLAPruner/DummyVisualTokenPruner
+        # use) to rebuild the full gather/mask index set; without it every hook silently
+        # no-ops with hook_error="missing_selected_indices" and no pruning ever happens.
+        self.last_selected_indices: Any | None = None
 
     def reset(self) -> None:
         super().reset()
         self.prev_score = None
         self.cached_indices = None
+        self.last_selected_indices = None
 
     def prune(
         self,
@@ -62,6 +68,7 @@ class SpecPruneVLA(VisualTokenPruner):
         if not self.enabled or self.keep_ratio >= 1.0 or keep == original_tokens:
             indices = first_k_indices(original_tokens, original_tokens)
             self.cached_indices = indices
+            self.last_selected_indices = indices
             metadata = self._metadata(
                 original_tokens=original_tokens,
                 kept_tokens=original_tokens,
@@ -84,6 +91,7 @@ class SpecPruneVLA(VisualTokenPruner):
             self.cached_indices = selected_indices
             reused_indices = False
 
+        self.last_selected_indices = selected_indices
         pruned_tokens = gather_tokens(visual_tokens, selected_indices)
         output_shape = self._validate_visual_tokens(pruned_tokens)
         metadata = self._metadata(
@@ -139,7 +147,9 @@ class SpecPruneVLA(VisualTokenPruner):
             score = torch.norm(visual_tokens.float(), dim=-1)
 
         if self.prev_score is not None and tuple(self.prev_score.shape) == tuple(score.shape):
-            score = self.temporal_momentum * self.prev_score + (1.0 - self.temporal_momentum) * score
+            score = (
+                self.temporal_momentum * self.prev_score + (1.0 - self.temporal_momentum) * score
+            )
         self.prev_score = score.detach()
 
         topk_indices = torch.topk(score, k=keep, dim=1, largest=True, sorted=False).indices

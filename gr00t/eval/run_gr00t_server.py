@@ -87,6 +87,128 @@ class ServerConfig:
     use_sim_policy_wrapper: bool = False
     """Whether to use the sim policy wrapper"""
 
+    # Efficient inference configs (opt-in; no effect when efficient_method is unset)
+    efficient_method: str = ""
+    """Visual-token pruning method from gr00t.efficient (e.g. 'vlapruner', 'dummy'). Empty disables it."""
+
+    efficient_keep_ratio: float = 1.0
+    """Fraction of visual tokens to keep when efficient_method is set."""
+
+    efficient_score_mode: str = "norm"
+    """VLA-Pruner scoring mode: 'norm', 'mean_abs', 'attention', or 'action'."""
+
+    efficient_reuse_steps: int = 2
+    """SpecPrune: recompute pruning indices every N calls, reusing cached indices in between."""
+
+    efficient_temporal_momentum: float = 0.8
+    """EMA blend factor for temporal score smoothing (VLA-Pruner and SpecPrune)."""
+
+    efficient_alpha: float = 0.5
+    """VLA-Pruner semantic/action score blend weight."""
+
+    efficient_beta: float = 0.5
+    """VLA-Pruner semantic/action score blend weight (complements alpha)."""
+
+    efficient_default_keep_ratio: float = 0.5
+    """ADP: keep ratio used when the scheduler has no action-state signal to react to.
+    This is the operative keep ratio for 'adp'/'adp_vlapruner' -- their constructors
+    ignore --efficient-keep-ratio and read this instead."""
+
+    efficient_contact_keep_ratio: float = 1.0
+    """ADP: keep ratio when the scheduler detects contact/gripper activity."""
+
+    efficient_move_keep_ratio: float = 0.6
+    """ADP: keep ratio while the scheduler detects the arm is moving."""
+
+    efficient_idle_keep_ratio: float = 0.5
+    """ADP: keep ratio when the scheduler detects no significant action delta."""
+
+    efficient_action_delta_threshold: float = 0.05
+    """ADP: action-delta magnitude above which the scheduler considers the arm 'moving'."""
+
+    efficient_prune_stage: str = "backbone"
+    """Where to prune: 'backbone' (early Qwen3-VL layer, reduces latency) or 'action_head' (post-backbone)."""
+
+    efficient_prune_layer: int = 3
+    """Decoder layer index for backbone-stage pruning (clamped after DeepStack injection layers)."""
+
+    efficient_torch_compile: bool = False
+    """torch.compile the DiT action head (CUDA graphs) to remove kernel-launch overhead."""
+
+
+def _attach_efficient_inference(model, config: "ServerConfig"):
+    """Attach an opt-in gr00t.efficient visual-token pruning hook to a loaded model.
+
+    No-op unless --efficient-method is set; existing server behavior is unchanged.
+    Returns the pruning method instance so the caller can wire its ``reset()``
+    into the server's "reset" endpoint -- without this, temporal-momentum state
+    (e.g. VLAPruner.prev_score) would never be cleared between episodes/clients,
+    since Gr00tPolicy.reset() has no knowledge of this externally-attached hook.
+    """
+    from gr00t.efficient.benchmark.registry import build_method
+
+    method = build_method(
+        config.efficient_method,
+        keep_ratio=config.efficient_keep_ratio,
+        score_mode=config.efficient_score_mode,
+        reuse_steps=config.efficient_reuse_steps,
+        temporal_momentum=config.efficient_temporal_momentum,
+        alpha=config.efficient_alpha,
+        beta=config.efficient_beta,
+        default_keep_ratio=config.efficient_default_keep_ratio,
+        contact_keep_ratio=config.efficient_contact_keep_ratio,
+        move_keep_ratio=config.efficient_move_keep_ratio,
+        idle_keep_ratio=config.efficient_idle_keep_ratio,
+        action_delta_threshold=config.efficient_action_delta_threshold,
+    )
+
+    if config.efficient_prune_stage == "backbone":
+        from gr00t.efficient.hooks.backbone_token_hook import (
+            BackboneVisualTokenHook,
+            attach_backbone_visual_token_hook,
+        )
+
+        hook = BackboneVisualTokenHook(
+            method=method, enabled=True, prune_layer=config.efficient_prune_layer
+        )
+        attach_backbone_visual_token_hook(model, hook)
+    else:
+        from gr00t.efficient.hooks.visual_token_hook import (
+            VisualTokenHook,
+            attach_visual_token_hook,
+        )
+
+        hook = VisualTokenHook(method=method, enabled=True)
+        attach_visual_token_hook(model, hook)
+
+    if config.efficient_torch_compile:
+        import torch
+
+        action_head = getattr(model, "action_head", None)
+        if action_head is not None and hasattr(action_head, "model"):
+            action_head.model = torch.compile(
+                action_head.model, mode="reduce-overhead", dynamic=False
+            )
+
+    print(
+        f"  Efficient inference: method={config.efficient_method} "
+        f"keep_ratio={config.efficient_keep_ratio} score_mode={config.efficient_score_mode} "
+        f"reuse_steps={config.efficient_reuse_steps} "
+        f"temporal_momentum={config.efficient_temporal_momentum} "
+        f"stage={config.efficient_prune_stage} torch_compile={config.efficient_torch_compile}"
+    )
+    if config.efficient_method in ("adp", "adp_vlapruner"):
+        print(
+            f"    ADP scheduler: default_keep_ratio={config.efficient_default_keep_ratio} "
+            f"contact_keep_ratio={config.efficient_contact_keep_ratio} "
+            f"move_keep_ratio={config.efficient_move_keep_ratio} "
+            f"idle_keep_ratio={config.efficient_idle_keep_ratio} "
+            f"action_delta_threshold={config.efficient_action_delta_threshold} "
+            f"(note: --efficient-keep-ratio is ignored for this method; "
+            f"--efficient-default-keep-ratio is the operative value)"
+        )
+    return method
+
 
 def main(config: ServerConfig):
     config.embodiment_tag = EmbodimentTag.resolve(config.embodiment_tag)
@@ -98,6 +220,7 @@ def main(config: ServerConfig):
     print(f"  Port: {config.port}")
 
     # Create and start the server
+    efficient_method = None
     if config.model_path is not None:
         # check if the model path exists
         if config.model_path.startswith("/") and not os.path.exists(config.model_path):
@@ -108,6 +231,8 @@ def main(config: ServerConfig):
             device=config.device,
             strict=config.strict,
         )
+        if config.efficient_method:
+            efficient_method = _attach_efficient_inference(policy.model, config)
     elif config.dataset_path is not None:
         if config.execution_horizon is None:
             raise ValueError(
@@ -163,6 +288,19 @@ def main(config: ServerConfig):
         from gr00t.policy.gr00t_policy import Gr00tSimPolicyWrapper
 
         policy = Gr00tSimPolicyWrapper(policy)
+
+    if efficient_method is not None and hasattr(efficient_method, "reset"):
+        # Gr00tPolicy.reset() / Gr00tSimPolicyWrapper.reset() have no knowledge
+        # of the externally-attached pruning hook, so the "reset" endpoint would
+        # otherwise be a complete no-op for VLA-Pruner's temporal-momentum state.
+        # Wrap it so a client calling reset between episodes actually clears it.
+        original_reset = policy.reset
+
+        def reset_with_efficient_state(options: dict | None = None):
+            efficient_method.reset()
+            return original_reset(options)
+
+        policy.reset = reset_with_efficient_state
 
     with PolicyServer(
         policy=policy,

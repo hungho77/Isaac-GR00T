@@ -82,6 +82,7 @@ RECORD_FIELDS = [
 SUMMARY_NUMERIC_FIELDS = [
     "success_rate",
     "latency_per_action_ms",
+    "latency_per_action_ms_median",
     "episode_time_s",
     "gpu_memory_mb",
     "peak_gpu_memory_mb",
