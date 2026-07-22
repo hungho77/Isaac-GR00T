@@ -38,6 +38,10 @@ def _make_mock_config():
     config.data.episode_sampling_rate = 0.5
     config.data.seed = 42
     config.data.allow_padding = False
+    config.data.shard_load_workers = 3
+    config.data.video_decode_workers = 2
+    config.data.num_ffmpeg_threads = 4
+    config.data.overlap_episode_io = True
     config.data.num_shards_per_epoch = 100
     config.data.override_pretraining_statistics = False
 
@@ -108,13 +112,20 @@ class TestDatasetFactory:
         with (
             patch("gr00t.data.dataset.factory.generate_stats"),
             patch("gr00t.data.dataset.factory.generate_rel_stats"),
-            patch("gr00t.data.dataset.factory.ShardedSingleStepDataset", return_value=mock_dataset),
+            patch(
+                "gr00t.data.dataset.factory.ShardedSingleStepDataset", return_value=mock_dataset
+            ) as dataset_cls,
             patch("torch.distributed.is_initialized", return_value=False),
         ):
             train_ds, eval_ds = factory.build(mock_processor)
 
         assert train_ds is not None
         assert eval_ds is None
+        loader_options = dataset_cls.call_args.kwargs
+        assert loader_options["shard_load_workers"] == 3
+        assert loader_options["video_decode_workers"] == 2
+        assert loader_options["num_ffmpeg_threads"] == 4
+        assert loader_options["overlap_episode_io"] is True
 
     def test_build_rejects_eval_strategy(self):
         from gr00t.data.dataset.factory import DatasetFactory

@@ -76,6 +76,10 @@ class DataConfig:
     shard_size: int = 2**10
     episode_sampling_rate: float = 0.1
     num_shards_per_epoch: int = int(1e5)
+    shard_load_workers: int = 1
+    video_decode_workers: int = 1
+    num_ffmpeg_threads: int = 0
+    overlap_episode_io: bool = False
     # When set, replaces per-dataset mix_ratio weights with len(dataset)^alpha weights.
     ds_weights_alpha: float | None = None
 

@@ -182,6 +182,18 @@ class FinetuneConfig:
     num_shards_per_epoch: int = int(1e5)
     """Number of shards to use for the dataset. reduce this number if vram is limited."""
 
+    shard_load_workers: int = 1
+    """Number of episodes to preload concurrently within each shard."""
+
+    video_decode_workers: int = 1
+    """Number of camera or mask streams to decode concurrently per episode."""
+
+    num_ffmpeg_threads: int = 0
+    """FFmpeg threads per TorchCodec decoder. Zero lets TorchCodec choose."""
+
+    overlap_episode_io: bool = False
+    """Load parquet, video, and masks concurrently for each episode."""
+
     save_only_model: bool = False
     """If True, save only model weights (skip optimizer/scheduler/RNG states). Cannot resume training from these checkpoints."""
 
@@ -197,6 +209,12 @@ class FinetuneConfig:
     Useful for CI/testing to skip the slow checkpoint shard loading."""
 
     def __post_init__(self) -> None:
+        if self.shard_load_workers < 1:
+            raise ValueError("shard_load_workers must be >= 1")
+        if self.video_decode_workers < 1:
+            raise ValueError("video_decode_workers must be >= 1")
+        if self.num_ffmpeg_threads < 0:
+            raise ValueError("num_ffmpeg_threads must be >= 0")
         if self.gradient_accumulation_steps < 1:
             raise ValueError(
                 f"gradient_accumulation_steps must be >= 1, got {self.gradient_accumulation_steps}"

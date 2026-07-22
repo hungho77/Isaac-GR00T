@@ -122,6 +122,10 @@ if __name__ == "__main__":
     config.data.episode_sampling_rate = ft_config.episode_sampling_rate
     config.data.num_shards_per_epoch = ft_config.num_shards_per_epoch
     config.data.ds_weights_alpha = ft_config.ds_weights_alpha
+    config.data.shard_load_workers = ft_config.shard_load_workers
+    config.data.video_decode_workers = ft_config.video_decode_workers
+    config.data.num_ffmpeg_threads = ft_config.num_ffmpeg_threads
+    config.data.overlap_episode_io = ft_config.overlap_episode_io
 
     config.training.save_only_model = ft_config.save_only_model
     config.training.resume_from_checkpoint = ft_config.resume_from_checkpoint
