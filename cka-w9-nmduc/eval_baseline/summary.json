@@ -1,0 +1,173 @@
+{
+  "model_path": "/kaggle/working/gr00t_n1d7_train_libero_object_cka_lora_r16_3k/baseline_recovery",
+  "dataset_path": "/tmp/datasets/libero_object_no_noops_1.0.0_lerobot",
+  "embodiment_tag": "LIBERO_PANDA",
+  "output_dir": "/tmp/gr00t_final_eval/benchmark/eval_baseline",
+  "run_name": "libero-baseline-3k",
+  "trajectory_ids": [
+    22,
+    2,
+    49,
+    5,
+    11,
+    10,
+    15,
+    20,
+    23,
+    19
+  ],
+  "samples_per_trajectory": 8,
+  "sample_stride": 8,
+  "warmup_steps": 2,
+  "denoising_steps": 4,
+  "seed": 42,
+  "device": "cuda:0",
+  "gpu": "Tesla T4",
+  "model_load_seconds": 57.489474892001454,
+  "training_runtime_seconds": 13159.508024930954,
+  "parameter_count": 3144016000,
+  "trainable_parameter_count": 1419078784,
+  "module_depths": {
+    "backbone_language": 16,
+    "action_dit": 32,
+    "vl_self_attention": 4
+  },
+  "cka_pruning_manifest": null,
+  "latency_mean_ms": 200.9923732126481,
+  "latency_median_ms": 200.07278299999598,
+  "latency_p95_ms": 210.69814450111153,
+  "peak_allocated_gib": 5.9487714767456055,
+  "peak_reserved_gib": 6.0390625,
+  "mse": 0.00033574303961358964,
+  "mae": 0.007414569146931171,
+  "training_runtime_source": "sum of completed persistent recovery stages",
+  "training_stage_records": [
+    {
+      "model": "baseline",
+      "from_step": 30,
+      "target_step": 50,
+      "status": "completed",
+      "elapsed_seconds": 182.2264440059662,
+      "resume_checkpoint": "/kaggle/working/gr00t_n1d7_train_libero_object_cka_lora_r16_3k/baseline_recovery/checkpoint-30",
+      "time_unix": 1785234301.9792683
+    },
+    {
+      "model": "baseline",
+      "from_step": 250,
+      "target_step": 500,
+      "status": "completed",
+      "elapsed_seconds": 1195.803120136261,
+      "resume_checkpoint": "/kaggle/working/gr00t_n1d7_train_libero_object_cka_lora_r16_3k/baseline_recovery/checkpoint-250",
+      "time_unix": 1785315772.8900688
+    },
+    {
+      "model": "baseline",
+      "from_step": 500,
+      "target_step": 750,
+      "status": "completed",
+      "elapsed_seconds": 1202.9025557041168,
+      "resume_checkpoint": "/kaggle/working/gr00t_n1d7_train_libero_object_cka_lora_r16_3k/baseline_recovery/checkpoint-500",
+      "time_unix": 1785318179.3764331
+    },
+    {
+      "model": "baseline",
+      "from_step": 790,
+      "target_step": 1000,
+      "status": "completed",
+      "elapsed_seconds": 1032.197378873825,
+      "resume_checkpoint": "/kaggle/working/gr00t_n1d7_train_libero_object_cka_lora_r16_3k/baseline_recovery/checkpoint-790",
+      "time_unix": 1785320734.7502744
+    },
+    {
+      "model": "baseline",
+      "from_step": 1000,
+      "target_step": 1500,
+      "status": "completed",
+      "elapsed_seconds": 2330.255879163742,
+      "resume_checkpoint": "/kaggle/working/gr00t_n1d7_train_libero_object_cka_lora_r16_3k/baseline_recovery/checkpoint-1000",
+      "time_unix": 1785343367.6269937
+    },
+    {
+      "model": "baseline",
+      "from_step": 1500,
+      "target_step": 1800,
+      "status": "completed",
+      "elapsed_seconds": 1417.6066856384277,
+      "resume_checkpoint": "/kaggle/working/gr00t_n1d7_train_libero_object_cka_lora_r16_3k/baseline_recovery/checkpoint-1500",
+      "time_unix": 1785347658.3167067
+    },
+    {
+      "model": "baseline",
+      "from_step": 1800,
+      "target_step": 2000,
+      "status": "completed",
+      "elapsed_seconds": 1002.5847690105438,
+      "resume_checkpoint": "/kaggle/working/gr00t_n1d7_train_libero_object_cka_lora_r16_3k/baseline_recovery/checkpoint-1800",
+      "time_unix": 1785350640.592542
+    },
+    {
+      "model": "baseline",
+      "from_step": 2000,
+      "target_step": 2500,
+      "status": "completed",
+      "elapsed_seconds": 2384.395280122757,
+      "resume_checkpoint": "/kaggle/working/gr00t_n1d7_train_libero_object_cka_lora_r16_3k/baseline_recovery/checkpoint-2000",
+      "time_unix": 1785382715.6086056
+    },
+    {
+      "model": "baseline",
+      "from_step": 2500,
+      "target_step": 3000,
+      "status": "completed",
+      "elapsed_seconds": 2411.5359122753143,
+      "resume_checkpoint": "/kaggle/working/gr00t_n1d7_train_libero_object_cka_lora_r16_3k/baseline_recovery/checkpoint-2500",
+      "time_unix": 1785387664.6317294
+    }
+  ],
+  "training_metadata_path": "/tmp/gr00t_final_eval/benchmark/eval_baseline/trainer_state.json",
+  "fine_tuned_checkpoint": "/kaggle/working/gr00t_n1d7_train_libero_object_cka_lora_r16_3k/baseline_recovery",
+  "fine_tuned_label": "baseline_recovery",
+  "fine_tuned_global_step": 3000,
+  "recovery_protocol": "matched_action_dit_lora_recovery_v1",
+  "recovery_contract": {
+    "protocol": "matched_action_dit_lora_recovery_v1",
+    "baseline_and_cka_matched": true,
+    "base_checkpoint": "/tmp/checkpoints/GR00T-N1.7-LIBERO/libero_object",
+    "lora": {
+      "target": "all Linear modules in every retained Action-DiT block",
+      "rank": 16,
+      "alpha": 32,
+      "dropout": 0.05,
+      "merged_for_final_inference": true
+    },
+    "fully_trainable_small_modules": [
+      "LoRA A/B matrices in retained Action-DiT Linear modules",
+      "timestep_encoder",
+      "proj_out_1",
+      "proj_out_2"
+    ],
+    "frozen_modules": [
+      "Qwen3-VL language backbone",
+      "vision tower",
+      "VLLN",
+      "base Action-DiT weights",
+      "state_encoder",
+      "action_encoder",
+      "action_decoder",
+      "position_embedding_if_present"
+    ],
+    "max_trainable_parameters": 64000000,
+    "resumable_checkpoint_format": "adapter_only_v1",
+    "max_steps_final": 3000,
+    "current_stage_target": 3000,
+    "save_steps": 50,
+    "global_batch": 1,
+    "gradient_accumulation": 8,
+    "effective_batch": 8,
+    "learning_rate": 0.0001,
+    "state_dropout_prob": 0.2,
+    "activation_checkpointing": "1",
+    "resource_note": "Kaggle T4 resource-constrained LoRA recovery. This is not the official 20K-step/global-batch-640 full Action-DiT LIBERO recipe."
+  },
+  "training_metadata_note": "Runtime is the cumulative wall-clock duration of completed recovery stages. It includes model loading and final checkpoint export in each Kaggle session."
+}

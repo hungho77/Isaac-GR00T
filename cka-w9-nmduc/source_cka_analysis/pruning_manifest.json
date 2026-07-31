@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "model_type": "Gr00tN1d7",
+  "method": "adjacent_linear_cka_topk",
+  "source_model": "/tmp/checkpoints/GR00T-N1.7-LIBERO/libero_object",
+  "calibration_dataset": "/tmp/datasets/libero_object_no_noops_1.0.0_lerobot",
+  "modules": {
+    "backbone_language": {
+      "original_depth": 16,
+      "keep_indices": [
+        0,
+        1,
+        2,
+        3,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        15
+      ]
+    },
+    "action_dit": {
+      "original_depth": 32,
+      "keep_indices": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        8,
+        10,
+        14,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        27,
+        28,
+        29,
+        30,
+        31
+      ]
+    },
+    "vl_self_attention": {
+      "original_depth": 4,
+      "keep_indices": [
+        0,
+        1,
+        2,
+        3
+      ]
+    }
+  }
+}

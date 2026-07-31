@@ -1,0 +1,52 @@
+{
+  "measurement_scope": "policy.get_action client RPC plus separate end-to-end rollout throughput",
+  "warning": "End-to-end rollout throughput includes simulator stepping and video encoding; do not report it as pure model latency.",
+  "control_frequency_hz_assumption": 20.0,
+  "action_chunk_budget_ms": 400.0,
+  "rows": [
+    {
+      "model": "baseline",
+      "tasks": 10,
+      "successes": 198,
+      "episodes_requested": 200,
+      "episodes_returned": 200,
+      "success_rate_exact_requested": 0.99,
+      "success_rate_weighted_by_returned": 0.99,
+      "success_rate_mean_per_task": 0.99,
+      "rollout_wall_seconds": 4772.054855090995,
+      "mean_wall_seconds_per_episode": 23.860274275454977,
+      "end_to_end_env_steps_per_second": 6.00894182291482,
+      "end_to_end_individual_action_chunks_per_second": 0.7678034120020889,
+      "policy_rpc_query_count": 797,
+      "policy_rpc_weighted_mean_ms": 530.9613760702902,
+      "policy_rpc_worst_task_p95_ms": 551.2516526010586,
+      "policy_rpc_worst_task_p99_ms": 582.4839158813085,
+      "policy_rpc_deadline_ms": 400.0,
+      "policy_rpc_deadline_miss_count": 797,
+      "policy_rpc_deadline_miss_rate": 1.0,
+      "control_realtime_feasible_at_assumed_frequency": false
+    },
+    {
+      "model": "cka",
+      "tasks": 10,
+      "successes": 199,
+      "episodes_requested": 200,
+      "episodes_returned": 200,
+      "success_rate_exact_requested": 0.995,
+      "success_rate_weighted_by_returned": 0.995,
+      "success_rate_mean_per_task": 0.9949999999999999,
+      "rollout_wall_seconds": 4798.197733797002,
+      "mean_wall_seconds_per_episode": 23.99098866898501,
+      "end_to_end_env_steps_per_second": 6.052272459605267,
+      "end_to_end_individual_action_chunks_per_second": 0.7725817495783996,
+      "policy_rpc_query_count": 808,
+      "policy_rpc_weighted_mean_ms": 474.56531946423047,
+      "policy_rpc_worst_task_p95_ms": 495.0908855007583,
+      "policy_rpc_worst_task_p99_ms": 565.8378320091284,
+      "policy_rpc_deadline_ms": 400.0,
+      "policy_rpc_deadline_miss_count": 808,
+      "policy_rpc_deadline_miss_rate": 1.0,
+      "control_realtime_feasible_at_assumed_frequency": false
+    }
+  ]
+}
