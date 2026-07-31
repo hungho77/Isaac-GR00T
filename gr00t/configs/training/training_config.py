@@ -93,6 +93,19 @@ class TrainingConfig:
     deepspeed_stage: int = 2  # ZeRO stage (1, 2, or 3)
     gradient_checkpointing: bool = False
 
+    # LoRA (see gr00t/utils/peft.py). rank=0 disables LoRA (default: full finetune
+    # of whatever tune_* flags select). rank>0 freezes the whole model and trains
+    # only small low-rank adapters on attention q/k/v projections -- drastically
+    # cuts optimizer-state VRAM vs. full finetuning of the same components.
+    lora_rank: int = 0
+    lora_alpha: int = 16
+    lora_dropout: float = 0.1
+    lora_action_head_only: bool = True
+    """If True, only wrap gr00t.model.action_head's attention projections
+    (DiT + vl_self_attention) with LoRA. If False, also wraps the backbone's
+    q_proj/k_proj/v_proj (only meaningful if tune_llm=True; a frozen backbone
+    has no gradient path to its LoRA adapters either)."""
+
     # Transformers loading parameters
     transformers_trust_remote_code: bool = True
     transformers_local_files_only: bool = False

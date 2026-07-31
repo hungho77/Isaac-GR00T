@@ -248,6 +248,18 @@ def run(config: Config):
     pipeline = MODEL_REGISTRY.get(type(config.model))(config, save_cfg_dir)
     pipeline.setup()
     model = pipeline.return_model()
+
+    if config.training.lora_rank > 0:
+        from gr00t.utils.peft import get_lora_model
+
+        model = get_lora_model(
+            model,
+            rank=config.training.lora_rank,
+            lora_alpha=config.training.lora_alpha,
+            lora_dropout=config.training.lora_dropout,
+            action_head_only=config.training.lora_action_head_only,
+        )
+
     train_dataset, eval_dataset = pipeline.return_dataset()
     data_collator = pipeline.return_collator()
     processor = pipeline.return_processor()

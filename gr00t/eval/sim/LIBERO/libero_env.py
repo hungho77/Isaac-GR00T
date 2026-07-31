@@ -98,7 +98,12 @@ def invert_gripper_action(action):
 class LiberoEnv(gym.Env):
     """LanguageTable env."""
 
-    def __init__(self, task_bddl_file: str, task_description: str):
+    def __init__(
+        self,
+        task_bddl_file: str,
+        task_description: str,
+        gripper_debounce_n: int = 1,
+    ):
         # `ignore_done=True`: outer `MultiStepWrapper` owns truncation; robosuite's
         # horizon-termination is redundant and conflicts with LIBERO's done-override.
         self._env = OffScreenRenderEnv(
@@ -108,6 +113,37 @@ class LiberoEnv(gym.Env):
             ignore_done=True,
         )
         self._task_description = task_description
+        # Gripper hysteresis: a per-step hard np.sign() binarize (in
+        # normalize_gripper_action) amplifies small noise around the 0.5
+        # decision boundary into full-amplitude open/close flips every step.
+        # Only flip the *committed* gripper command once `gripper_debounce_n`
+        # consecutive raw predictions agree on the opposite state -- this
+        # persists across action-chunk boundaries since `self` lives for the
+        # whole episode, and resets in `reset()`.
+        self._gripper_debounce_n = gripper_debounce_n
+        # -1.0 == open in robosuite's convention: the arm starts un-grasped.
+        self._gripper_committed = -1.0
+        self._gripper_pending_sign = None
+        self._gripper_pending_count = 0
+        # Which gripper convention the policy's action head emits. Two are in
+        # play here and they differ by a sign:
+        #  * "unit" (default, matches the NVIDIA base checkpoints): [0,1] with
+        #    0=close, 1=open, per invert_gripper_action's docstring. Needs the
+        #    [0,1]->[-1,1] remap AND the inversion to reach robosuite's [-1,1]
+        #    where -1=open, +1=close.
+        #  * "signed": already [-1,1] with +1=close -- i.e. robosuite's own
+        #    convention, as produced by a locally converted LeRobot v3->v2
+        #    LIBERO dataset. Feeding that through the "unit" path applies one
+        #    flip too many, so the gripper OPENS precisely when the policy
+        #    commands a close -- the arm reaches the object, then releases it.
+        # Set GR00T_GRIPPER_SIGNED=1 when evaluating a policy finetuned on such
+        # a converted dataset; leave unset for the base/NVIDIA checkpoints.
+        self._gripper_signed = os.environ.get("GR00T_GRIPPER_SIGNED", "0") not in (
+            "0",
+            "",
+            "false",
+            "False",
+        )
         # Convert Gym action space to Gymnasium.
         self.observation_space = gym.spaces.Dict(
             {
@@ -165,6 +201,10 @@ class LiberoEnv(gym.Env):
         observation = self._env.reset()
         observation = self._process_observation(observation)
         info = {"success": self._env.check_success()}
+        # -1.0 == open in robosuite's convention: the arm starts un-grasped.
+        self._gripper_committed = -1.0
+        self._gripper_pending_sign = None
+        self._gripper_pending_count = 0
         return observation, info
 
     def step(self, action):
@@ -180,8 +220,30 @@ class LiberoEnv(gym.Env):
             ],
             axis=0,
         )
-        action_vector = normalize_gripper_action(action_vector)
-        action_vector = invert_gripper_action(action_vector)
+        # Resolve the gripper command into robosuite's convention (+1=close,
+        # -1=open); see self._gripper_signed in __init__ for why there are two
+        # paths. Binarizing is deferred out of normalize_gripper_action so the
+        # debounce below sees the raw decision.
+        if self._gripper_signed:
+            raw_sign = float(np.sign(action_vector[-1]))
+        else:
+            action_vector = normalize_gripper_action(action_vector, binarize=False)
+            raw_sign = -float(np.sign(action_vector[-1]))
+        if raw_sign == 0.0:
+            raw_sign = self._gripper_committed
+        if raw_sign == self._gripper_pending_sign:
+            self._gripper_pending_count += 1
+        else:
+            self._gripper_pending_sign = raw_sign
+            self._gripper_pending_count = 1
+        if (
+            self._gripper_pending_count >= self._gripper_debounce_n
+            and raw_sign != self._gripper_committed
+        ):
+            self._gripper_committed = raw_sign
+        # Already in robosuite's convention above -- no invert_gripper_action
+        # here; that flip is folded into the else-branch's leading minus sign.
+        action_vector[-1] = self._gripper_committed
         observation, reward, done, info = self._env.step(action_vector)
         observation = self._process_observation(observation)
         info["success"] = self._env.check_success()

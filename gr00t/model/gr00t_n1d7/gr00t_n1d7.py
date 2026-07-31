@@ -550,6 +550,41 @@ class Gr00tN1d7(PreTrainedModel):
             transformers_loading_kwargs=transformers_loading_kwargs,
         )
 
+        # NOT called here: pruning must happen AFTER the full pretrained
+        # weights are loaded (see prun_layers docstring below). __init__ runs
+        # before from_pretrained's weight-loading step, so pruning here would
+        # shrink the architecture first and then fail to match the full
+        # checkpoint's state_dict (spurious "unexpected keys"). The caller
+        # (gr00t/model/gr00t_n1d7/setup.py _create_model) invokes
+        # prun_layers() explicitly, once weights are already loaded.
+
+    def prun_layers(self) -> None:
+        """CLP structural pruning (see scripts/cluster_prune.py, CLP_VLA repo).
+
+        Must run AFTER the full pretrained weights are loaded above -- CLP's
+        established convention (CLP_VLA README) is: always build the FULL
+        architecture, load full pretrained weights, THEN prune in-memory.
+        Reloading a pruned checkpoint later must instead build the pruned
+        architecture first (call this before `load_state_dict`), matching
+        CLP_VLA eval's `load_pruned_model` flag -- never load full weights
+        into an already-pruned architecture or vice versa.
+        """
+        config = self.config
+        if config.kept_layer_idx_list_backbone is not None:
+            self.backbone.prun_layers(config.kept_layer_idx_list_backbone)
+        if config.kept_layer_idx_list_dit is not None:
+            self.action_head.model.prun_layers(config.kept_layer_idx_list_dit)
+        if config.kept_layer_idx_list_vl_self_attn is not None:
+            if isinstance(self.action_head.vl_self_attention, nn.Identity):
+                logger.warning(
+                    "kept_layer_idx_list_vl_self_attn is set but vl_self_attention is "
+                    "nn.Identity() (vl_self_attention_cfg.num_layers == 0) -- ignoring."
+                )
+            else:
+                self.action_head.vl_self_attention.prun_layers(
+                    config.kept_layer_idx_list_vl_self_attn
+                )
+
     def prepare_input(self, inputs: dict) -> Tuple[BatchFeature, BatchFeature]:
         """Prepare inputs for backbone and action head."""
 

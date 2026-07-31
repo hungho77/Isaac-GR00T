@@ -20,18 +20,45 @@ This module provides the core policy classes for running Gr00t models:
 - Gr00tSimPolicyWrapper: Wrapper for compatibility with existing Gr00t simulation environments
 """
 
+import json
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import torch
-from transformers import AutoModel, AutoProcessor
+from safetensors.torch import load_file as load_safetensors
+from transformers import AutoConfig, AutoModel, AutoProcessor
 
 from gr00t.data.embodiment_tags import FINETUNE_ONLY_TAGS, POSTTRAIN_TAGS, EmbodimentTag
 from gr00t.data.interfaces import BaseProcessor
 from gr00t.data.types import MessageType, ModalityConfig, VLAStepData
 
 from .policy import BasePolicy, PolicyWrapper
+
+# NOTE: Gr00tN1d7 is imported lazily inside Gr00tPolicy.__init__, not here at
+# module level. gr00t.model.modules.dit requires `diffusers`, which is only
+# installed in the main project venv -- not in the LIBERO/SimplerEnv sim
+# client venvs. Those clients import this module (via rollout_policy.py's
+# create_gr00t_sim_policy) even in --policy-client-host mode, where a
+# Gr00tPolicy is never actually constructed; a top-level import here would
+# make diffusers a hard requirement for the client venvs too.
+
+
+def _load_checkpoint_state_dict(model_dir: Path) -> dict[str, torch.Tensor]:
+    """Load a HF-style checkpoint's weights, handling both a single
+    ``model.safetensors`` and a sharded ``model-NNNNN-of-MMMMM.safetensors``
+    + ``model.safetensors.index.json`` layout.
+    """
+    index_path = model_dir / "model.safetensors.index.json"
+    if index_path.exists():
+        with open(index_path) as f:
+            index = json.load(f)
+        shard_files = sorted(set(index["weight_map"].values()))
+        state_dict: dict[str, torch.Tensor] = {}
+        for shard_file in shard_files:
+            state_dict.update(load_safetensors(str(model_dir / shard_file)))
+        return state_dict
+    return load_safetensors(str(model_dir / "model.safetensors"))
 
 
 def _rec_to_dtype(x: Any, dtype: torch.dtype) -> Any:
@@ -105,8 +132,44 @@ class Gr00tPolicy(BasePolicy):
             embodiment_tag = EmbodimentTag.resolve(embodiment_tag)
         model_dir = Path(model_path)
 
-        # Load the pretrained model and move to target device with bfloat16 precision
-        model = AutoModel.from_pretrained(model_dir)
+        # Load the pretrained model and move to target device with bfloat16 precision.
+        #
+        # A checkpoint saved after CLP-style pruning (config.prune_model=True)
+        # already has the SMALLER, pruned shapes in its state_dict. Plain
+        # AutoModel.from_pretrained() always builds the FULL (unpruned)
+        # architecture in __init__ first and loads weights into it afterward
+        # -- the layers the pruned checkpoint doesn't have would just be left
+        # at random init, silently producing garbage actions instead of
+        # erroring. So for a pruned checkpoint we build the architecture,
+        # prune it to match, and only then load the (already-pruned)
+        # state_dict -- the reverse order from a full/unpruned checkpoint.
+        config = AutoConfig.from_pretrained(model_dir, trust_remote_code=True)
+        if getattr(config, "prune_model", False):
+            from gr00t.model.gr00t_n1d7.gr00t_n1d7 import Gr00tN1d7
+
+            model = Gr00tN1d7(config)
+            model.prun_layers()
+            state_dict = _load_checkpoint_state_dict(model_dir)
+            missing, unexpected = model.load_state_dict(state_dict, strict=False)
+            # lm_head.weight is tied to the input embedding (embed_tokens.weight)
+            # in Qwen-family models -- save_pretrained() dedupes tied weights and
+            # omits it, and the manual load_state_dict() above (needed to prune
+            # before loading) skips the automatic re-tie from_pretrained() would
+            # normally do. GR00T never reads lm_head (it only consumes backbone
+            # hidden_states, not vocab logits), so a stale/random lm_head.weight
+            # is harmless -- allowlist exactly this one key rather than loosening
+            # the check generally.
+            missing = [k for k in missing if not k.endswith("lm_head.weight")]
+            if missing or unexpected:
+                raise RuntimeError(
+                    f"Pruned checkpoint weight mismatch for {model_dir} (pruned architecture "
+                    f"did not match the saved state_dict -- kept_layer_idx_list_* here must "
+                    f"match what the checkpoint was actually trained/merged with):\n"
+                    f"  missing ({len(missing)}): {missing}\n"
+                    f"  unexpected ({len(unexpected)}): {unexpected}"
+                )
+        else:
+            model = AutoModel.from_pretrained(model_dir)
         model.eval()  # Set model to evaluation mode
         model.to(device=device, dtype=torch.bfloat16)
         self.model = model

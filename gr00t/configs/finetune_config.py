@@ -63,6 +63,50 @@ class FinetuneConfig:
     Dropout probability applied to state inputs for regularization during training.
     """
 
+    # --- CLP structural pruning (see scripts/cluster_prune.py in the CLP_VLA repo) ---
+    prune_model: bool = False
+    """If True, prune the backbone/DiT/vl_self_attention architecture right after
+    the full pretrained weights from base_model_path are loaded, using the
+    kept_layer_idx_list_* below (Gr00tN1d7.prun_layers, called from __init__).
+    At least one of the three kept_layer_idx_list_* must be set."""
+
+    kept_layer_idx_list_backbone: str | None = None
+    """Comma-separated 0-indexed backbone LLM layers to keep, e.g.
+    "0,1,3,6,8,9,12,14". Layers are homogeneous, so any subset is safe. Only
+    used when prune_model=True."""
+
+    kept_layer_idx_list_dit: str | None = None
+    """Comma-separated 0-indexed DiT block indices to keep. AlternateVLDiT
+    assigns each block's role (and weight shape) by absolute position, so
+    this must be a union of whole, position-aligned groups -- generate it
+    with `python scripts/cluster_prune.py --group-size 4 ...` (CLP_VLA repo),
+    not by hand-picking individual indices. Gr00tN1d7.prun_layers raises if
+    a group is split. Only used when prune_model=True."""
+
+    kept_layer_idx_list_vl_self_attn: str | None = None
+    """Comma-separated 0-indexed vl_self_attention block indices to keep.
+    Blocks are homogeneous (self-attention only), so any subset is safe.
+    Only used when prune_model=True."""
+
+    # --- LoRA (see gr00t/utils/peft.py) ---
+    lora_rank: int = 0
+    """LoRA rank. 0 (default) disables LoRA -- tune_* flags do full finetuning
+    as usual. >0 freezes the whole model and trains only low-rank adapters on
+    attention q/k/v projections, cutting optimizer-state VRAM drastically
+    (e.g. rank=16-32 is a reasonable starting point)."""
+
+    lora_alpha: int = 16
+    """LoRA scaling factor (applied output = base + (lora_alpha/rank) * BA x)."""
+
+    lora_dropout: float = 0.1
+    """Dropout applied inside the LoRA adapter path."""
+
+    lora_action_head_only: bool = True
+    """If True, only LoRA-wrap gr00t.model.action_head (DiT + vl_self_attention).
+    If False, also targets the backbone's q_proj/k_proj/v_proj -- only useful
+    combined with --tune_llm, since a frozen backbone has no gradient path to
+    its own LoRA adapters."""
+
     # --- Data Augmentation ---
     random_rotation_angle: int | None = None
     """Maximum rotation angle (in degrees) for random rotation augmentation of input images."""
@@ -208,4 +252,13 @@ class FinetuneConfig:
                 f"accumulated_batch_size={accumulated_batch_size} "
                 f"(× gradient_accumulation_steps={self.gradient_accumulation_steps}).",
                 stacklevel=2,
+            )
+        if self.prune_model and not (
+            self.kept_layer_idx_list_backbone
+            or self.kept_layer_idx_list_dit
+            or self.kept_layer_idx_list_vl_self_attn
+        ):
+            raise ValueError(
+                "prune_model=True but none of kept_layer_idx_list_backbone / "
+                "_dit / _vl_self_attn is set -- there would be nothing to prune."
             )

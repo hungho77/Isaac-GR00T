@@ -27,6 +27,18 @@ from gr00t.configs.finetune_config import FinetuneConfig
 from gr00t.experiment.experiment import run
 
 
+def _parse_idx_list(s: str | None) -> list[int] | None:
+    """Parse a comma-separated 0-indexed layer list, e.g. "0,1,3,6" -> [0, 1, 3, 6].
+
+    Mirrors scripts/cluster_prune.py's --manual parsing (CLP_VLA repo) so a
+    candidate printed there can be pasted straight into
+    --kept-layer-idx-list-* here.
+    """
+    if not s:
+        return None
+    return sorted(int(x) for x in s.split(",") if x.strip() != "")
+
+
 # Make sure the user provided modality config is registered.
 def load_modality_config(modality_config_path: str):
     import importlib
@@ -100,6 +112,20 @@ if __name__ == "__main__":
     config.model.model_name = "nvidia/Cosmos-Reason2-2B"
     config.model.backbone_trainable_params_fp32 = True
     config.model.use_relative_action = True
+
+    config.model.prune_model = ft_config.prune_model
+    config.model.kept_layer_idx_list_backbone = _parse_idx_list(
+        ft_config.kept_layer_idx_list_backbone
+    )
+    config.model.kept_layer_idx_list_dit = _parse_idx_list(ft_config.kept_layer_idx_list_dit)
+    config.model.kept_layer_idx_list_vl_self_attn = _parse_idx_list(
+        ft_config.kept_layer_idx_list_vl_self_attn
+    )
+
+    config.training.lora_rank = ft_config.lora_rank
+    config.training.lora_alpha = ft_config.lora_alpha
+    config.training.lora_dropout = ft_config.lora_dropout
+    config.training.lora_action_head_only = ft_config.lora_action_head_only
 
     config.training.experiment_name = ft_config.experiment_name
     config.training.start_from_checkpoint = ft_config.base_model_path

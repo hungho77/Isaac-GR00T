@@ -122,6 +122,20 @@ class Gr00tN1d7Config(PretrainedConfig):
     # Multi-embodiment parameters
     max_num_embodiments: int = 32
 
+    # CLP structural pruning (see scripts/cluster_prune.py in CLP_VLA).
+    # None = don't prune that component. When set, must be applied AFTER the
+    # full pretrained weights are loaded (Gr00tN1d7.__init__ does this last),
+    # so a pruned checkpoint's own from_pretrained must set these to the SAME
+    # lists used when it was pruned, matching CLP_VLA's load_pruned_model
+    # convention -- otherwise the saved state_dict won't match the rebuilt
+    # (unpruned) architecture shapes.
+    prune_model: bool = False
+    kept_layer_idx_list_backbone: list[int] | None = None
+    # kept_layer_idx_list_dit must be a union of whole, position-aligned
+    # groups -- see DiT._required_prune_group_size() in gr00t/model/modules/dit.py.
+    kept_layer_idx_list_dit: list[int] | None = None
+    kept_layer_idx_list_vl_self_attn: list[int] | None = None
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         for key, value in kwargs.items():

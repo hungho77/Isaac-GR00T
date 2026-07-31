@@ -505,13 +505,18 @@ def create_gr00t_sim_policy(
     policy_client_port: int | None = None,
     trt_engine_path: str = "",
     trt_mode: InferenceMode = InferenceMode.n17_full_pipeline,
+    policy_client_timeout_ms: int = 15000,
 ) -> BasePolicy:
     from gr00t.policy.gr00t_policy import Gr00tPolicy, Gr00tSimPolicyWrapper
 
     if policy_client_host and policy_client_port:
         from gr00t.policy.server_client import PolicyClient
 
-        policy = PolicyClient(host=policy_client_host, port=policy_client_port)
+        policy = PolicyClient(
+            host=policy_client_host,
+            port=policy_client_port,
+            timeout_ms=policy_client_timeout_ms,
+        )
     else:
         gr00t_policy = Gr00tPolicy(
             embodiment_tag=embodiment_tag,
@@ -549,6 +554,7 @@ def run_gr00t_sim_policy(
     trt_mode: InferenceMode = InferenceMode.n17_full_pipeline,
     seed: int | None = None,
     robocasa_split: str = "",
+    policy_client_timeout_ms: int = 15000,
 ):
     # seed_everything resolves `None` via the GR00T_EVAL_SEED env var and is a
     # no-op when that is also unset, so the historical non-deterministic
@@ -572,6 +578,7 @@ def run_gr00t_sim_policy(
         policy_client_port,
         trt_engine_path=trt_engine_path,
         trt_mode=trt_mode,
+        policy_client_timeout_ms=policy_client_timeout_ms,
     )
 
     # Release TRT engines explicitly on every exit path: the sim-eval entrypoint
@@ -669,6 +676,11 @@ class RolloutConfig:
     robocasa_split: str = ""
     """Optional RoboCasa/RoboCasa365 split forwarded to the simulator."""
 
+    policy_client_timeout_ms: int = 15000
+    """ZMQ recv/send timeout (ms) when using --policy-client-host/--policy-client-port.
+    Raise this if a batched (--n-envs > 1) inference call on the server takes
+    longer than the default 15s and PolicyClient raises zmq.error.Again."""
+
 
 if __name__ == "__main__":
     args = tyro.cli(RolloutConfig)
@@ -697,6 +709,7 @@ if __name__ == "__main__":
         trt_mode=args.trt_mode,
         seed=args.seed,
         robocasa_split=args.robocasa_split,
+        policy_client_timeout_ms=args.policy_client_timeout_ms,
     )
     print("results: ", results)
     print("success rate: ", np.mean(results[1]))

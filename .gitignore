@@ -7,9 +7,14 @@
 /examples/LIBERO/libero_goal_no_noops_1.0.0_lerobot/
 /examples/LIBERO/libero_object_no_noops_1.0.0_lerobot/
 /examples/LIBERO/libero_spatial_no_noops_1.0.0_lerobot/
+/examples/LIBERO/converted
 
 # UV lock file
 uv.lock
+
+# Local training / evaluation artifacts
+checkpoints/
+eval_logs/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

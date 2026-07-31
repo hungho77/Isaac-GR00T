@@ -1,0 +1,15 @@
+hydra-core==1.3.2
+numpy==1.26.4
+wandb==0.18.7
+easydict==1.9
+transformers==4.57.3
+opencv-python==4.10.0.84
+robomimic==0.2.0
+einops==0.4.1
+thop==0.1.1-2209072238
+robosuite==1.4.0
+bddl==1.0.1
+future==0.18.2
+matplotlib==3.9.4
+cloudpickle==2.1.0
+gym==0.25.2

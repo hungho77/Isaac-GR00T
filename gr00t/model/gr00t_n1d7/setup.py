@@ -89,6 +89,17 @@ class Gr00tN1d7Pipeline(ModelPipeline):
                 state_dropout_prob=self.config.model.state_dropout_prob,
                 backbone_trainable_params_fp32=self.config.model.backbone_trainable_params_fp32,
                 load_bf16=self.config.model.load_bf16,
+                # CLP-style structural pruning (see gr00t/model/gr00t_n1d7/gr00t_n1d7.py
+                # Gr00tN1d7.__init__ -> prun_layers()). Without these overrides,
+                # from_pretrained loads config.json from start_from_checkpoint
+                # (the *base* checkpoint, which predates these fields) and
+                # prune_model silently falls back to its dataclass default
+                # (False), so --prune_model on the CLI was never reaching the
+                # model regardless of what was passed.
+                prune_model=self.config.model.prune_model,
+                kept_layer_idx_list_backbone=self.config.model.kept_layer_idx_list_backbone,
+                kept_layer_idx_list_dit=self.config.model.kept_layer_idx_list_dit,
+                kept_layer_idx_list_vl_self_attn=self.config.model.kept_layer_idx_list_vl_self_attn,
                 transformers_loading_kwargs=self.transformers_loading_kwargs,
                 output_loading_info=True,
                 **self.transformers_loading_kwargs,
@@ -118,6 +129,15 @@ class Gr00tN1d7Pipeline(ModelPipeline):
                     "Checkpoint weight mismatch for "
                     f"{self.config.training.start_from_checkpoint}:\n" + "\n".join(errors)
                 )
+
+            # CLP-style structural pruning happens HERE -- after the full
+            # pretrained checkpoint's weights have successfully loaded into
+            # the full (unpruned) architecture above. Pruning any earlier
+            # (e.g. inside Gr00tN1d7.__init__) shrinks the architecture
+            # before this state_dict load and produces spurious "unexpected
+            # keys" for every layer that no longer exists.
+            if self.config.model.prune_model:
+                model.prun_layers()
 
         else:
             model = self.model_class(

@@ -14,6 +14,7 @@
 # limitations under the License.
 
 from contextlib import nullcontext
+import logging
 import os
 from typing import Optional
 
@@ -24,6 +25,9 @@ from diffusers.models.embeddings import SinusoidalPositionalEmbedding, TimestepE
 import torch
 from torch import nn
 import torch.nn.functional as F
+
+
+logger = logging.getLogger(__name__)
 
 
 def _is_spark_sm121() -> bool:
@@ -257,6 +261,8 @@ class DiT(ModelMixin, ConfigMixin):
 
         all_blocks = []
         for idx in range(self.config.num_layers):
+            # Even blocks cross-attend to encoder_hidden_states; odd blocks become
+            # pure self-attention when interleave_self_attention is enabled.
             use_self_attn = idx % 2 == 1 and interleave_self_attention
             curr_cross_attention_dim = cross_attention_dim if not use_self_attn else None
 
@@ -288,6 +294,63 @@ class DiT(ModelMixin, ConfigMixin):
             "Total number of DiT parameters: ",
             sum(p.numel() for p in self.parameters() if p.requires_grad),
         )
+
+    def _required_prune_group_size(self) -> int:
+        """Smallest pruning unit that keeps every block's role/shape correct.
+
+        forward() assigns each block's role (self- vs cross-attention) by its
+        absolute position `idx % 2`, and (for AlternateVLDiT) further
+        alternates cross-attention between text and image tokens every
+        `attend_text_every_n_blocks` pairs via `idx % (2 * n)`. Self- and
+        cross-attention blocks are built with different to_k/to_v shapes
+        (inner_dim vs cross_attention_dim), so pruning must never split one
+        of these role-cycles -- only drop it whole, or a surviving block gets
+        re-numbered into a role/shape it was never built for.
+        """
+        if not self.config.interleave_self_attention:
+            return 1
+        attend_text_every_n_blocks = getattr(self, "attend_text_every_n_blocks", None)
+        if attend_text_every_n_blocks is None:
+            return 2
+        return 2 * attend_text_every_n_blocks
+
+    def prun_layers(self, kept_layer_idx_list: list[int]) -> None:
+        """CLP-style structural pruning: keep only whole, position-aligned groups.
+
+        `kept_layer_idx_list` must be the union of whole groups aligned to
+        position 0 (e.g. group [4,5,6,7], never [5,6,7,8]) of size
+        `self._required_prune_group_size()` -- this is exactly what
+        `propose_kept_groups` in scripts/cluster_prune.py (CLP_VLA repo, run
+        with --group-size matching that value) produces. Any list that
+        splits a group raises, instead of silently building a corrupted
+        model.
+        """
+        old_blocks = self.transformer_blocks
+        n = len(old_blocks)
+        group_size = self._required_prune_group_size()
+        kept_sorted = sorted(kept_layer_idx_list)
+
+        if group_size > 1:
+            groups_present: dict[int, list[int]] = {}
+            for idx in kept_sorted:
+                group_start = (idx // group_size) * group_size
+                groups_present.setdefault(group_start, []).append(idx)
+            for group_start, members in groups_present.items():
+                expected = list(range(group_start, min(group_start + group_size, n)))
+                if sorted(members) != expected:
+                    raise ValueError(
+                        f"kept_layer_idx_list splits the group starting at index "
+                        f"{group_start} (needs whole group {expected}, got "
+                        f"{sorted(members)}). This DiT interleaves block roles by "
+                        f"position (group_size={group_size}); pruning must keep or "
+                        "drop entire groups -- see prun_layers docstring."
+                    )
+
+        logger.info(
+            f"[{self.__class__.__name__}] Pruning transformer_blocks: {n} -> "
+            f"{len(kept_sorted)} (group_size={group_size}). Kept: {kept_sorted}"
+        )
+        self.transformer_blocks = torch.nn.ModuleList([old_blocks[i] for i in kept_sorted])
 
     def forward(
         self,
@@ -340,6 +403,10 @@ class AlternateVLDiT(DiT):
     """
     Alternate Vision-Language DiT that separates image and non-image tokens
     during cross-attention processing.
+
+    ``encoder_hidden_states`` here interleaves image and text tokens in a single
+    sequence, so each cross-attention block attends to only one of the two token
+    types, alternating across layers.
     """
 
     def __init__(self, *args, attend_text_every_n_blocks: int = 2, **kwargs):
@@ -462,6 +529,21 @@ class SelfAttentionTransformer(ModelMixin, ConfigMixin):
             "Total number of SelfAttentionTransformer parameters: ",
             sum(p.numel() for p in self.parameters() if p.requires_grad),
         )
+
+    def prun_layers(self, kept_layer_idx_list: list[int]) -> None:
+        """CLP-style structural pruning: keep only kept_layer_idx_list blocks.
+
+        Safe for an arbitrary (non-contiguous) index list: every block here
+        is built identically (self-attention only, no cross_attention_dim),
+        so there is no per-position role/shape to preserve -- unlike
+        AlternateVLDiT (see DiT.prun_layers above).
+        """
+        old_blocks = self.transformer_blocks
+        logger.info(
+            f"[SelfAttentionTransformer] Pruning transformer_blocks: {len(old_blocks)} -> "
+            f"{len(kept_layer_idx_list)}. Kept: {kept_layer_idx_list}"
+        )
+        self.transformer_blocks = nn.ModuleList([old_blocks[i] for i in kept_layer_idx_list])
 
     def forward(
         self,

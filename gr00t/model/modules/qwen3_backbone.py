@@ -22,7 +22,6 @@ from transformers.feature_extraction_utils import BatchFeature
 
 logger = logging.getLogger(__name__)
 
-
 try:
     from transformers import Qwen3VLForConditionalGeneration
 
@@ -269,6 +268,26 @@ class Qwen3Backbone(torch.nn.Module):
                 logger.debug(f"Backbone trainable parameter: {name}")
         if not any(p.requires_grad for p in self.parameters()):
             logger.warning("No backbone trainable parameters found.")
+
+    def prun_layers(self, kept_layer_idx_list: list[int]) -> None:
+        """CLP-style structural pruning: keep only ``kept_layer_idx_list`` decoder layers.
+
+        Safe to call with an arbitrary (non-contiguous) index list: unlike
+        AlternateVLDiT's blocks (see dit.py), Qwen3's decoder layers are
+        homogeneous -- every layer has the same weight shapes and role, so
+        dropping any subset and re-numbering the rest cannot mis-assign a
+        role/shape. Call this once, after the pretrained weights are loaded
+        and before further training.
+        """
+        old_layers = self.model.language_model.layers
+        logger.info(
+            f"[Qwen3Backbone] Pruning LLM: {len(old_layers)} layers -> "
+            f"{len(kept_layer_idx_list)} layers. Kept: {kept_layer_idx_list}"
+        )
+        self.model.language_model.layers = torch.nn.ModuleList(
+            [old_layers[i] for i in kept_layer_idx_list]
+        )
+        self.select_layer = len(kept_layer_idx_list)
 
     def set_frozen_modules_to_eval_mode(self):
         """
