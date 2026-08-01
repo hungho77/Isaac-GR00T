@@ -1,0 +1,42 @@
+{
+  "protocol": "matched_action_dit_lora_recovery_v1",
+  "baseline_and_cka_matched": true,
+  "baseline_source": "external immutable P25 baseline reference",
+  "candidate_prune_budget": "P37.5 language + P37.5 Action-DiT; VLSA unpruned",
+  "base_checkpoint": "/tmp/checkpoints/GR00T-N1.7-LIBERO/libero_object",
+  "lora": {
+    "target": "all Linear modules in every retained Action-DiT block",
+    "rank": 16,
+    "alpha": 32,
+    "dropout": 0.05,
+    "merged_for_final_inference": true
+  },
+  "fully_trainable_small_modules": [
+    "LoRA A/B matrices in retained Action-DiT Linear modules",
+    "timestep_encoder",
+    "proj_out_1",
+    "proj_out_2"
+  ],
+  "frozen_modules": [
+    "Qwen3-VL language backbone",
+    "vision tower",
+    "VLLN",
+    "base Action-DiT weights",
+    "state_encoder",
+    "action_encoder",
+    "action_decoder",
+    "position_embedding_if_present"
+  ],
+  "max_trainable_parameters": 64000000,
+  "resumable_checkpoint_format": "adapter_only_v1",
+  "max_steps_final": 3000,
+  "current_stage_target": 3000,
+  "save_steps": 50,
+  "global_batch": 1,
+  "gradient_accumulation": 8,
+  "effective_batch": 8,
+  "learning_rate": 0.0001,
+  "state_dropout_prob": 0.2,
+  "activation_checkpointing": "1",
+  "resource_note": "Kaggle T4 resource-constrained LoRA recovery. This is not the official 20K-step/global-batch-640 full Action-DiT LIBERO recipe."
+}

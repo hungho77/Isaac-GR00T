@@ -1,0 +1,56 @@
+[
+  {
+    "model": "cka_p37",
+    "from_step": 0,
+    "target_step": 10,
+    "status": "failed",
+    "elapsed_seconds": 154.4355595111847,
+    "resume_checkpoint": null,
+    "time_unix": 1785558513.5788877
+  },
+  {
+    "model": "cka_p37",
+    "from_step": 10,
+    "target_step": 500,
+    "status": "completed",
+    "elapsed_seconds": 1628.0385270118713,
+    "resume_checkpoint": "/kaggle/working/gr00t_n1d7_train_libero_object_cka_p37_lora_r16_3k/cka_recovery/checkpoint-10",
+    "time_unix": 1785561612.4157999
+  },
+  {
+    "model": "cka_p37",
+    "from_step": 500,
+    "target_step": 1000,
+    "status": "completed",
+    "elapsed_seconds": 1676.3299350738525,
+    "resume_checkpoint": "/kaggle/working/gr00t_n1d7_train_libero_object_cka_p37_lora_r16_3k/cka_recovery/checkpoint-500",
+    "time_unix": 1785563687.134999
+  },
+  {
+    "model": "cka_p37",
+    "from_step": 1000,
+    "target_step": 1500,
+    "status": "completed",
+    "elapsed_seconds": 1664.765037536621,
+    "resume_checkpoint": "/kaggle/working/gr00t_n1d7_train_libero_object_cka_p37_lora_r16_3k/cka_recovery/checkpoint-1000",
+    "time_unix": 1785566192.82129
+  },
+  {
+    "model": "cka_p37",
+    "from_step": 1500,
+    "target_step": 2000,
+    "status": "completed",
+    "elapsed_seconds": 1678.5612795352936,
+    "resume_checkpoint": "/kaggle/working/gr00t_n1d7_train_libero_object_cka_p37_lora_r16_3k/cka_recovery/checkpoint-1500",
+    "time_unix": 1785568395.9542878
+  },
+  {
+    "model": "cka_p37",
+    "from_step": 2000,
+    "target_step": 3000,
+    "status": "completed",
+    "elapsed_seconds": 3254.4343481063843,
+    "resume_checkpoint": "/kaggle/working/gr00t_n1d7_train_libero_object_cka_p37_lora_r16_3k/cka_recovery/checkpoint-2000",
+    "time_unix": 1785571771.6669695
+  }
+]

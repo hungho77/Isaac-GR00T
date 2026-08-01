@@ -1,0 +1,389 @@
+{
+  "schema_version": 1,
+  "reference_id": "gr00t-n1.7-libero-object-baseline-lora-r16-step3000-seed42",
+  "role": "immutable baseline metric reference for P25/P37/P50 CKA experiments",
+  "created_unix": 1785554551.2461295,
+  "source": {
+    "archive_name": "gr00t_n1d7_libero_object_cka_lora_3k_final_results.zip",
+    "archive_path_at_build_time": "C:\\Users\\nguye\\Downloads\\gr00t_n1d7_libero_object_cka_lora_3k_final_results.zip",
+    "archive_size_bytes": 23603239,
+    "archive_sha256": "0c44b917a99e7f0f6ccd65a74d031452ad7bee3174a6ef584a386a46ba9fbc40",
+    "archive_internal_root": "gr00t_n1d7_libero_object_cka_lora_r16_3k/",
+    "reference_notebooks": [
+      {
+        "name": "n1-7-cka-object-lora-safe-v5.ipynb",
+        "path_at_build_time": "C:\\Users\\nguye\\Downloads\\n1-7-cka-object-lora-safe-v5.ipynb",
+        "size_bytes": 135797,
+        "sha256": "afaced164d6952ab429aaad4d6eee4976206c2a5ce6a47b99ac815e7e2e48bcb"
+      },
+      {
+        "name": "n1.7-cka-lora-continue-from-3k.ipynb",
+        "path_at_build_time": "C:\\Users\\nguye\\Downloads\\n1.7-cka-lora-continue-from-3k.ipynb",
+        "size_bytes": 136384,
+        "sha256": "f245e59d7929869b3ebd8980d8d8cb90aafbced87135bea7a2772c9b1434662b"
+      }
+    ],
+    "merged_model_weights_in_source_archive": false
+  },
+  "model": {
+    "family": "GR00T-N1.7",
+    "checkpoint_variant": "LIBERO/libero_object",
+    "embodiment_tag": "LIBERO_PANDA",
+    "fine_tuned_label": "baseline_recovery",
+    "fine_tuned_global_step": 3000,
+    "recovery_protocol": "matched_action_dit_lora_recovery_v1",
+    "parameter_count": 3144016000,
+    "trainable_parameter_count_reported_by_benchmark": 1419078784,
+    "module_depths": {
+      "backbone_language": 16,
+      "action_dit": 32,
+      "vl_self_attention": 4
+    },
+    "model_load_seconds": 57.489474892001454
+  },
+  "dataset": {
+    "name": "libero_object_no_noops_1.0.0_lerobot",
+    "hugging_face_repo": "IPEC-COMMUNITY/libero_object_no_noops_1.0.0_lerobot",
+    "suite": "libero_object",
+    "calibration_trajectory_ids": [
+      0,
+      1,
+      3,
+      4,
+      6,
+      7,
+      9,
+      12,
+      14,
+      16
+    ],
+    "validation_trajectory_ids": [
+      22,
+      2,
+      49,
+      5,
+      11,
+      10,
+      15,
+      20,
+      23,
+      19
+    ],
+    "calibration_and_validation_disjoint": true
+  },
+  "recovery": {
+    "contract": {
+      "protocol": "matched_action_dit_lora_recovery_v1",
+      "baseline_and_cka_matched": true,
+      "base_checkpoint": "/tmp/checkpoints/GR00T-N1.7-LIBERO/libero_object",
+      "lora": {
+        "target": "all Linear modules in every retained Action-DiT block",
+        "rank": 16,
+        "alpha": 32,
+        "dropout": 0.05,
+        "merged_for_final_inference": true
+      },
+      "fully_trainable_small_modules": [
+        "LoRA A/B matrices in retained Action-DiT Linear modules",
+        "timestep_encoder",
+        "proj_out_1",
+        "proj_out_2"
+      ],
+      "frozen_modules": [
+        "Qwen3-VL language backbone",
+        "vision tower",
+        "VLLN",
+        "base Action-DiT weights",
+        "state_encoder",
+        "action_encoder",
+        "action_decoder",
+        "position_embedding_if_present"
+      ],
+      "max_trainable_parameters": 64000000,
+      "resumable_checkpoint_format": "adapter_only_v1",
+      "max_steps_final": 3000,
+      "current_stage_target": 3000,
+      "save_steps": 50,
+      "global_batch": 1,
+      "gradient_accumulation": 8,
+      "effective_batch": 8,
+      "learning_rate": 0.0001,
+      "state_dropout_prob": 0.2,
+      "activation_checkpointing": "1",
+      "resource_note": "Kaggle T4 resource-constrained LoRA recovery. This is not the official 20K-step/global-batch-640 full Action-DiT LIBERO recipe."
+    },
+    "training_runtime_seconds": 13159.508024930954,
+    "training_runtime_source": "sum of completed persistent recovery stages",
+    "training_stage_records": [
+      {
+        "model": "baseline",
+        "from_step": 30,
+        "target_step": 50,
+        "status": "completed",
+        "elapsed_seconds": 182.2264440059662,
+        "resume_checkpoint": "/kaggle/working/gr00t_n1d7_train_libero_object_cka_lora_r16_3k/baseline_recovery/checkpoint-30",
+        "time_unix": 1785234301.9792683
+      },
+      {
+        "model": "baseline",
+        "from_step": 250,
+        "target_step": 500,
+        "status": "completed",
+        "elapsed_seconds": 1195.803120136261,
+        "resume_checkpoint": "/kaggle/working/gr00t_n1d7_train_libero_object_cka_lora_r16_3k/baseline_recovery/checkpoint-250",
+        "time_unix": 1785315772.8900688
+      },
+      {
+        "model": "baseline",
+        "from_step": 500,
+        "target_step": 750,
+        "status": "completed",
+        "elapsed_seconds": 1202.9025557041168,
+        "resume_checkpoint": "/kaggle/working/gr00t_n1d7_train_libero_object_cka_lora_r16_3k/baseline_recovery/checkpoint-500",
+        "time_unix": 1785318179.3764331
+      },
+      {
+        "model": "baseline",
+        "from_step": 790,
+        "target_step": 1000,
+        "status": "completed",
+        "elapsed_seconds": 1032.197378873825,
+        "resume_checkpoint": "/kaggle/working/gr00t_n1d7_train_libero_object_cka_lora_r16_3k/baseline_recovery/checkpoint-790",
+        "time_unix": 1785320734.7502744
+      },
+      {
+        "model": "baseline",
+        "from_step": 1000,
+        "target_step": 1500,
+        "status": "completed",
+        "elapsed_seconds": 2330.255879163742,
+        "resume_checkpoint": "/kaggle/working/gr00t_n1d7_train_libero_object_cka_lora_r16_3k/baseline_recovery/checkpoint-1000",
+        "time_unix": 1785343367.6269937
+      },
+      {
+        "model": "baseline",
+        "from_step": 1500,
+        "target_step": 1800,
+        "status": "completed",
+        "elapsed_seconds": 1417.6066856384277,
+        "resume_checkpoint": "/kaggle/working/gr00t_n1d7_train_libero_object_cka_lora_r16_3k/baseline_recovery/checkpoint-1500",
+        "time_unix": 1785347658.3167067
+      },
+      {
+        "model": "baseline",
+        "from_step": 1800,
+        "target_step": 2000,
+        "status": "completed",
+        "elapsed_seconds": 1002.5847690105438,
+        "resume_checkpoint": "/kaggle/working/gr00t_n1d7_train_libero_object_cka_lora_r16_3k/baseline_recovery/checkpoint-1800",
+        "time_unix": 1785350640.592542
+      },
+      {
+        "model": "baseline",
+        "from_step": 2000,
+        "target_step": 2500,
+        "status": "completed",
+        "elapsed_seconds": 2384.395280122757,
+        "resume_checkpoint": "/kaggle/working/gr00t_n1d7_train_libero_object_cka_lora_r16_3k/baseline_recovery/checkpoint-2000",
+        "time_unix": 1785382715.6086056
+      },
+      {
+        "model": "baseline",
+        "from_step": 2500,
+        "target_step": 3000,
+        "status": "completed",
+        "elapsed_seconds": 2411.5359122753143,
+        "resume_checkpoint": "/kaggle/working/gr00t_n1d7_train_libero_object_cka_lora_r16_3k/baseline_recovery/checkpoint-2500",
+        "time_unix": 1785387664.6317294
+      }
+    ],
+    "note": "Runtime is the cumulative wall-clock duration of completed recovery stages. It includes model loading and final checkpoint export in each Kaggle session."
+  },
+  "offline_evaluation": {
+    "protocol": {
+      "trajectory_ids": [
+        22,
+        2,
+        49,
+        5,
+        11,
+        10,
+        15,
+        20,
+        23,
+        19
+      ],
+      "samples_per_trajectory": 8,
+      "sample_stride": 8,
+      "warmup_steps": 2,
+      "denoising_steps": 4,
+      "seed": 42,
+      "device": "cuda:0",
+      "gpu": "Tesla T4",
+      "sample_count": 80
+    },
+    "metrics": {
+      "latency_mean_ms": 200.9923732126481,
+      "latency_median_ms": 200.07278299999598,
+      "latency_p95_ms": 210.69814450111153,
+      "peak_allocated_gib": 5.9487714767456055,
+      "peak_reserved_gib": 6.0390625,
+      "mse": 0.00033574303961358964,
+      "mae": 0.007414569146931171
+    },
+    "per_step_file": "baseline_per_step.csv"
+  },
+  "model_only_control": {
+    "model": "baseline",
+    "measurement_scope": "model_only_policy_inference",
+    "latency_mean_ms": 200.9923732126481,
+    "latency_median_ms": 200.07278299999598,
+    "latency_p95_ms": 210.69814450111153,
+    "control_frequency_hz_assumption": 20.0,
+    "executed_action_steps_per_query": 8,
+    "single_control_step_budget_ms": 50.0,
+    "action_chunk_budget_ms": 400.0,
+    "p95_deadline_headroom_ms": 189.30185549888847,
+    "p95_budget_utilization": 0.5267453612527788,
+    "p95_action_chunk_realtime_feasible": true,
+    "mean_max_policy_queries_per_second": 4.975313162465171,
+    "source_summary": "/kaggle/working/gr00t_n1d7_libero_object_cka_lora_r16_3k/eval_baseline/summary.json",
+    "interpretation": "P95 fits inside the assumed 8-step action-chunk execution window."
+  },
+  "success_rate": {
+    "validation_passed": true,
+    "protocol": {
+      "suite": "libero_object",
+      "mode": "repo_full",
+      "tasks_per_model": 10,
+      "episodes_per_task": 20,
+      "episodes_per_model": 200,
+      "models": [
+        "baseline",
+        "cka"
+      ]
+    },
+    "baseline_validation": {
+      "tasks": 10,
+      "episodes_requested": 200,
+      "episodes_returned": 200,
+      "successes": 198,
+      "success_rate_exact_requested": 0.99,
+      "policy_rpc_queries": 797,
+      "latency_instrumented": true
+    },
+    "aggregate": {
+      "control_realtime_feasible_at_assumed_frequency": "False",
+      "end_to_end_env_steps_per_second": "6.00894182291482",
+      "end_to_end_individual_action_chunks_per_second": "0.7678034120020889",
+      "episodes_requested": "200",
+      "episodes_returned": "200",
+      "mean_wall_seconds_per_episode": "23.860274275454977",
+      "model": "baseline",
+      "policy_rpc_deadline_miss_count": "797",
+      "policy_rpc_deadline_miss_rate": "1.0",
+      "policy_rpc_deadline_ms": "400.0",
+      "policy_rpc_query_count": "797",
+      "policy_rpc_weighted_mean_ms": "530.9613760702902",
+      "policy_rpc_worst_task_p95_ms": "551.2516526010586",
+      "policy_rpc_worst_task_p99_ms": "582.4839158813085",
+      "rollout_wall_seconds": "4772.054855090995",
+      "success_rate_exact_requested": "0.99",
+      "success_rate_mean_per_task": "0.99",
+      "success_rate_weighted_by_returned": "0.99",
+      "successes": "198",
+      "tasks": "10"
+    },
+    "per_task_file": "baseline_per_task.csv"
+  },
+  "closed_loop_latency_control": {
+    "measurement_scope": "policy.get_action client RPC plus separate end-to-end rollout throughput",
+    "warning": "End-to-end rollout throughput includes simulator stepping and video encoding; do not report it as pure model latency.",
+    "metrics": {
+      "model": "baseline",
+      "tasks": 10,
+      "successes": 198,
+      "episodes_requested": 200,
+      "episodes_returned": 200,
+      "success_rate_exact_requested": 0.99,
+      "success_rate_weighted_by_returned": 0.99,
+      "success_rate_mean_per_task": 0.99,
+      "rollout_wall_seconds": 4772.054855090995,
+      "mean_wall_seconds_per_episode": 23.860274275454977,
+      "end_to_end_env_steps_per_second": 6.00894182291482,
+      "end_to_end_individual_action_chunks_per_second": 0.7678034120020889,
+      "policy_rpc_query_count": 797,
+      "policy_rpc_weighted_mean_ms": 530.9613760702902,
+      "policy_rpc_worst_task_p95_ms": 551.2516526010586,
+      "policy_rpc_worst_task_p99_ms": 582.4839158813085,
+      "policy_rpc_deadline_ms": 400.0,
+      "policy_rpc_deadline_miss_count": 797,
+      "policy_rpc_deadline_miss_rate": 1.0,
+      "control_realtime_feasible_at_assumed_frequency": false
+    }
+  },
+  "video_evidence": {
+    "baseline_video_count": 200,
+    "baseline_failure_count": 2,
+    "baseline_failure_videos": [
+      {
+        "relative_path": "baseline/06_pick_up_the_butter_and_place_it_in_the_basket/5427e4f6-b298-4495-8b1e-49c3cdceddf4_s0.mp4",
+        "task_directory": "06_pick_up_the_butter_and_place_it_in_the_basket",
+        "size_bytes": 1560415
+      },
+      {
+        "relative_path": "baseline/08_pick_up_the_chocolate_pudding_and_place_it_in_the_basket/743c2768-aa77-442b-a7b5-28ff772e7b11_s0.mp4",
+        "task_directory": "08_pick_up_the_chocolate_pudding_and_place_it_in_the_basket",
+        "size_bytes": 1132269
+      }
+    ],
+    "videos_in_this_reference_package": false,
+    "all_models_video_summary_from_source": {
+      "video_root": "/tmp/gr00t_final_eval/rollouts/videos",
+      "archive": "/tmp/libero_object_full_sr_all_videos.zip",
+      "video_count": 401,
+      "video_size_gib": 0.12058192305266857,
+      "baseline_count": 200,
+      "cka_count": 201,
+      "failure_count": 3,
+      "success_count": 398,
+      "unknown_outcome_count": 0,
+      "note": "Includes every completed/max-length rollout video emitted by the repository video wrapper. Extra unfinished vector-env fragments are intentionally discarded by the upstream wrapper and are not scored episodes."
+    }
+  },
+  "comparison_contract": {
+    "purpose": "Compare future CKA candidates without rerunning the baseline.",
+    "must_match": [
+      "model family and LIBERO Object checkpoint variant",
+      "dataset version and embodiment tag",
+      "recovery protocol, LoRA rank/alpha/dropout, step count, effective batch and seed",
+      "validation trajectory IDs, sample count/stride, denoising steps and warmup",
+      "GPU class and inference implementation for latency/VRAM",
+      "10 LIBERO Object tasks, 20 episodes/task, n_envs=5, max_episode_steps=720 and n_action_steps=8"
+    ],
+    "paired_offline_join_keys": [
+      "trajectory_id",
+      "step",
+      "seed"
+    ],
+    "primary_metrics": [
+      "parameter_count",
+      "latency_mean_ms",
+      "latency_p95_ms",
+      "peak_allocated_gib",
+      "success_rate_exact_requested"
+    ],
+    "secondary_metrics": [
+      "mse",
+      "mae",
+      "closed_loop policy RPC latency"
+    ]
+  },
+  "limitations": [
+    "The package contains metrics and provenance, not model weights; it cannot run inference.",
+    "The source archive explicitly excludes merged model weights, raw activations and raw rollout videos.",
+    "Latency and VRAM are reusable only when the future candidate uses the same hardware/software protocol.",
+    "This is a single-seed baseline; additional seeds require their own baseline references.",
+    "Offline MSE/MAE is secondary to closed-loop LIBERO success rate."
+  ]
+}

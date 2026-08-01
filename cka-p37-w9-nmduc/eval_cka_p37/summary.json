@@ -1,0 +1,147 @@
+{
+  "model_path": "/kaggle/working/gr00t_n1d7_train_libero_object_cka_p37_lora_r16_3k/cka_recovery",
+  "dataset_path": "/tmp/datasets/libero_object_no_noops_1.0.0_lerobot",
+  "embodiment_tag": "LIBERO_PANDA",
+  "output_dir": "/tmp/gr00t_p37_eval/benchmark/eval_cka_p37",
+  "run_name": "libero-cka-p37-3k",
+  "trajectory_ids": [
+    22,
+    2,
+    49,
+    5,
+    11,
+    10,
+    15,
+    20,
+    23,
+    19
+  ],
+  "samples_per_trajectory": 8,
+  "sample_stride": 8,
+  "warmup_steps": 2,
+  "denoising_steps": 4,
+  "seed": 42,
+  "device": "cuda:0",
+  "gpu": "Tesla T4",
+  "model_load_seconds": 29.518708674000663,
+  "training_runtime_seconds": 9902.129127264023,
+  "parameter_count": 2439144064,
+  "trainable_parameter_count": 1016222848,
+  "module_depths": {
+    "backbone_language": 10,
+    "action_dit": 20,
+    "vl_self_attention": 4
+  },
+  "cka_pruning_manifest": {
+    "schema_version": 1,
+    "model_type": "Gr00tN1d7",
+    "method": "adjacent_linear_cka_topk",
+    "source_model": "/tmp/checkpoints/GR00T-N1.7-LIBERO/libero_object",
+    "calibration_dataset": "/tmp/datasets/libero_object_no_noops_1.0.0_lerobot",
+    "modules": {
+      "backbone_language": {
+        "original_depth": 16,
+        "keep_indices": [
+          0,
+          1,
+          2,
+          3,
+          8,
+          9,
+          10,
+          11,
+          12,
+          15
+        ]
+      },
+      "action_dit": {
+        "original_depth": 32,
+        "keep_indices": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          10,
+          14,
+          18,
+          20,
+          22,
+          23,
+          25,
+          26,
+          27,
+          28,
+          29,
+          30,
+          31
+        ]
+      },
+      "vl_self_attention": {
+        "original_depth": 4,
+        "keep_indices": [
+          0,
+          1,
+          2,
+          3
+        ]
+      }
+    }
+  },
+  "latency_mean_ms": 151.86175556273156,
+  "latency_median_ms": 151.09180150011525,
+  "latency_p95_ms": 156.47058834993004,
+  "peak_allocated_gib": 4.620476722717285,
+  "peak_reserved_gib": 4.71875,
+  "mse": 0.0027562116738408804,
+  "mae": 0.022598037496209145,
+  "training_runtime_source": "sum of completed persistent P37 recovery stages",
+  "fine_tuned_checkpoint": "/kaggle/working/gr00t_n1d7_train_libero_object_cka_p37_lora_r16_3k/cka_recovery",
+  "fine_tuned_label": "cka_p37_recovery",
+  "fine_tuned_global_step": 3000,
+  "recovery_protocol": "matched_action_dit_lora_recovery_v1",
+  "recovery_contract": {
+    "protocol": "matched_action_dit_lora_recovery_v1",
+    "baseline_and_cka_matched": true,
+    "baseline_source": "external immutable P25 baseline reference",
+    "candidate_prune_budget": "P37.5 language + P37.5 Action-DiT; VLSA unpruned",
+    "base_checkpoint": "/tmp/checkpoints/GR00T-N1.7-LIBERO/libero_object",
+    "lora": {
+      "target": "all Linear modules in every retained Action-DiT block",
+      "rank": 16,
+      "alpha": 32,
+      "dropout": 0.05,
+      "merged_for_final_inference": true
+    },
+    "fully_trainable_small_modules": [
+      "LoRA A/B matrices in retained Action-DiT Linear modules",
+      "timestep_encoder",
+      "proj_out_1",
+      "proj_out_2"
+    ],
+    "frozen_modules": [
+      "Qwen3-VL language backbone",
+      "vision tower",
+      "VLLN",
+      "base Action-DiT weights",
+      "state_encoder",
+      "action_encoder",
+      "action_decoder",
+      "position_embedding_if_present"
+    ],
+    "max_trainable_parameters": 64000000,
+    "resumable_checkpoint_format": "adapter_only_v1",
+    "max_steps_final": 3000,
+    "current_stage_target": 3000,
+    "save_steps": 50,
+    "global_batch": 1,
+    "gradient_accumulation": 8,
+    "effective_batch": 8,
+    "learning_rate": 0.0001,
+    "state_dropout_prob": 0.2,
+    "activation_checkpointing": "1",
+    "resource_note": "Kaggle T4 resource-constrained LoRA recovery. This is not the official 20K-step/global-batch-640 full Action-DiT LIBERO recipe."
+  }
+}

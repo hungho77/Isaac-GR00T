@@ -1,0 +1,41 @@
+{
+  "validated_unix": 1785580346.9316337,
+  "full_sr_valid": true,
+  "protocol": {
+    "suite": "libero_object",
+    "mode": "repo_full",
+    "tasks_per_model": 10,
+    "episodes_per_task": 20,
+    "episodes_per_model": 200,
+    "models": [
+      "baseline",
+      "cka"
+    ]
+  },
+  "latency": {
+    "instrumented": true,
+    "scope": "policy.get_action client RPC plus separate end-to-end rollout throughput",
+    "control_frequency_hz_assumption": 20.0,
+    "action_chunk_budget_ms": 400.0
+  },
+  "models": {
+    "baseline": {
+      "tasks": 10,
+      "episodes_requested": 200,
+      "episodes_returned": 200,
+      "successes": 198,
+      "success_rate_exact_requested": 0.99,
+      "policy_rpc_queries": 797,
+      "latency_instrumented": true
+    },
+    "cka": {
+      "tasks": 10,
+      "episodes_requested": 200,
+      "episodes_returned": 200,
+      "successes": 199,
+      "success_rate_exact_requested": 0.995,
+      "policy_rpc_queries": 818,
+      "latency_instrumented": true
+    }
+  }
+}

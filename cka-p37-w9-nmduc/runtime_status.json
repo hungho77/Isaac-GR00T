@@ -1,0 +1,11 @@
+{
+  "stage": "Verify LIBERO sim env imports",
+  "event": "completed",
+  "time_unix": 1785575045.0174572,
+  "detail": null,
+  "command": [
+    "bash",
+    "-lc",
+    "printf 'n\\n' | /tmp/Isaac-GR00T/gr00t/eval/sim/LIBERO/libero_uv/.venv/bin/python -c \"import gymnasium, gym, mujoco, robosuite, libero, bddl, future, easydict, tyro, zmq; from gr00t.eval.sim.LIBERO.libero_env import register_libero_envs; register_libero_envs(); print('LIBERO sim env OK')\""
+  ]
+}
