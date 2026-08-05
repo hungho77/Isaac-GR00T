@@ -38,7 +38,7 @@ N_ENVS="${N_ENVS:-8}"
 N_ACTION_STEPS="${N_ACTION_STEPS:-8}"
 MAX_EPISODE_STEPS="${MAX_EPISODE_STEPS:-720}"
 POLICY_CLIENT_TIMEOUT_MS="${POLICY_CLIENT_TIMEOUT_MS:-60000}"
-LOG_DIR="eval_logs/libero_object_$(date +%Y%m%d_%H%M%S)"
+LOG_DIR="eval_logs/libero_spatial_$(date +%Y%m%d_%H%M%S)"
 
 while [ "$#" -gt 0 ]; do
     case "$1" in

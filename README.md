@@ -4,10 +4,22 @@ Fork của [NVIDIA Isaac GR00T N1.7](https://developer.nvidia.com/isaac/gr00t), 
 phương pháp CLP (CKA-guided layer pruning) — vốn thiết kế cho GR00T-N1.5 — sang kiến
 trúc N1.7 (backbone Qwen3-VL/Cosmos-Reason2-2B + action head `AlternateVLDiT`).
 
-**Kết quả chính: cắt xuống 43.2% tham số và giảm 62% latency mà không mất accuracy —
-200/200 rollout trên full LIBERO Object suite, ngang model gốc.**
+**Kết quả chính: cắt xuống 43.2% tham số và giảm ~62% latency. Trên Object, Spatial và
+Goal, accuracy giữ nguyên (100% / 100% / 99.83%). Trên LIBERO-10 (Long) — suite
+long-horizon — accuracy giảm 4 điểm (95.00% → 91.00%).**
 
-## Tóm tắt
+## Tóm tắt theo suite (cấu hình v10: DiT=4, backbone=4, vlsa=2 — 43.2% tham số)
+
+| Suite | Base | v10cfg | Δ |
+|---|---:|---:|---:|
+| Object | 100.00% | 100.00% | 0 |
+| Spatial | 100.00% | 100.00% | 0 |
+| Goal | 100.00% | 99.83% | −0.17 |
+| **10 (Long)** | **95.00%** | **91.00%** | **−4.00** |
+
+Trên LIBERO-10, tăng DiT lên 12 (v12cfg, 52.5% tham số) lấy lại phần lớn: **93.50%**.
+
+## Tóm tắt theo checkpoint (LIBERO Object)
 
 | Checkpoint | DiT | Backbone | vlsa | Success | Params | % params | Latency¹ | Control freq |
 |---|---|---|---|---|---|---|---|---|
@@ -23,8 +35,14 @@ trúc N1.7 (backbone Qwen3-VL/Cosmos-Reason2-2B + action head `AlternateVLDiT`).
 [PRUNING_RESULTS.md](PRUNING_RESULTS.md) để có breakdown theo thành phần, cột GPU-side,
 và các cảnh báo về độ tin cậy của phép đo.
 
-Không cấu hình nào trong 7 checkpoint cho thấy suy giảm accuracy — kể cả v10 chỉ còn
-4/32 DiT block (12.5% độ sâu gốc), 4/16 backbone layer, 2/4 vlsa layer.
+Trên Object, không cấu hình nào trong 7 checkpoint cho thấy suy giảm — kể cả v10 chỉ còn
+4/32 DiT block (12.5% độ sâu gốc), 4/16 backbone layer, 2/4 vlsa layer. Điểm suy giảm
+đầu tiên chỉ xuất hiện trên LIBERO-10; bảng đầy đủ cho Long/Goal/Spatial ở
+[PRUNING_RESULTS.md](PRUNING_RESULTS.md).
+
+**Lưu ý khi eval:** checkpoint finetune trên dataset Object (đã qua
+`convert_v3_to_v2.py`) cần `GR00T_GRIPPER_SIGNED=1`; Spatial/Goal/Long tải thẳng ở định
+dạng LeRobot v2.1 nên **không** dùng cờ này.
 
 ## Tài liệu
 

@@ -84,15 +84,41 @@ trùng khớp E2E đo được trong vòng 0.2 ms — xác nhận phép chuẩn 
 loại bỏ hoàn toàn thành phần CPU vốn không phụ thuộc số layer. Thứ tự giảm đơn điệu
 đúng như kỳ vọng: `61.54 → 52.71 → 38.06 → 28.25 → 23.84 → 23.78 → 21.62`.
 
-**Cột Tổng (chuẩn hoá) là số nên dùng khi báo cáo hiệu năng triển khai** — vì robot thật
-phải chịu cả chi phí tiền xử lý CPU, không chỉ phần GPU. Chênh lệch giữa hai cột (−64.9%
-so với −62.1% cho v10) phản ánh đúng thực tế: Data Processing là phần **không giảm được
-bằng prune**, nên càng cắt sâu thì tỷ trọng của nó càng lớn và lợi ích biên càng giảm —
-cùng bản chất với sàn cứng 30.5% ở phần tham số.
+
 
 Control freq = `n_action_steps(8) × (1000 / tổng_ms)` — model trả về action chunk chạy
 open-loop trong `n_action_steps` bước mô phỏng trước khi suy luận lại.
 
+
+## LIBERO-10 (Long), Goal, Spatial
+
+Dataset tải thẳng từ HF ở định dạng LeRobot v2.1, eval **không** dùng cờ
+`GR00T_GRIPPER_SIGNED`. Latency đo trên RTX 4090, cùng điều kiện bảng Object.
+
+| Model | Backbone | DiT | vlsa | Params | % base | SR | E2E | 1/E2E |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| **libero_10 (base)** | 16 | 32 | 4 | 3,455,180,928 | 100.0 | 95.00% | 63.5 ms | 15.7 Hz |
+| libero_10 v8cfg | 7 | 4 | 3 | 1,693,296,512 | 49.0 | 92.00% | 30.3 ms | 33.0 Hz |
+| libero_10 v10cfg | 4 | 4 | 2 | 1,491,930,240 | 43.2 | 91.00% | 28.1 ms | 35.6 Hz |
+| libero_10 v11cfg | 4 | 8 | 2 | 1,627,264,128 | 47.1 | 90.25% | 31.2 ms | 32.0 Hz |
+| libero_10 v12cfg | 4 | 12 | 3 | 1,812,956,288 | 52.5 | 93.50% | 35.6 ms | 28.1 Hz |
+| **libero_goal (base)** | 16 | 32 | 4 | 3,455,180,928 | 100.0 | 100.00% | 65.8 ms | 15.2 Hz |
+| libero_goal v10cfg | 4 | 4 | 2 | 1,491,930,240 | 43.2 | 99.83% | 28.1 ms | 35.6 Hz |
+| **libero_spatial (base)** | 16 | 32 | 4 | 3,455,180,928 | 100.0 | 100.00% | 62.7 ms | 15.9 Hz |
+| libero_spatial v10cfg | 4 | 4 | 2 | 1,491,930,240 | 43.2 | 100.00% | 24.3 ms | 41.2 Hz |
+
+`1/E2E` = số lần gọi inference mỗi giây. Control freq (quy ước bảng Object,
+`8 / E2E`): base 10 = 126 Hz, v10cfg = 285 Hz, base goal = 122 Hz, base spatial =
+128 Hz, spatial v10cfg = 330 Hz.
+
+Tổng hợp suy giảm ở v10cfg (43.2% params):
+
+| Suite | Base | v10cfg | Δ |
+|---|---:|---:|---:|
+| Object | 100.00% | 100.00% | 0 |
+| Spatial | 100.00% | 100.00% | 0 |
+| Goal | 100.00% | 99.83% | −0.17 |
+| **10 (Long)** | **95.00%** | **91.00%** | **−4.00** |
 
 ## Giới hạn lý thuyết của layer pruning
 
@@ -120,38 +146,3 @@ v8/v9): **1 backbone LLM layer = 50,336,000**, **1 DiT block = 33,833,472**,
 **81.7%** toàn bộ dư địa lý thuyết `(100−43.2)/(100−30.5)`. Phần còn lại chỉ 12.7 điểm
 phần trăm. Muốn nén sâu hơn nữa buộc phải dùng kỹ thuật khác (quantization, width
 pruning, distillation, hoặc thay vision tower nhỏ hơn).
-
-## Kết luận chính
-
-**v10 (DiT=4, backbone=4, vlsa=2) là cấu hình nhỏ nhất và nhanh nhất chưa cho thấy suy
-giảm accuracy: 200/200 trên full LIBERO Object suite, chỉ còn 43.2% tham số của model
-gốc (1.49 tỷ so với 3.46 tỷ), GPU-side latency 21.62 ms so với 61.54 ms của base —
-giảm 64.9%. E2E chuẩn hoá ≈ 24.3 ms, control frequency ≈ 329 Hz, gấp 2.6 lần base
-(124 Hz).**
-
-Điều đáng chú ý nhất: v10 chỉ giữ **4/32 DiT block (12.5% độ sâu gốc), 4/16 backbone
-layer (25%), 2/4 vlsa layer (50%)** mà vẫn hoàn thành trọn vẹn 200/200 rollout — không
-một task nào dưới 20/20.
-
-Cả 7 checkpoint, trải dài từ 100% xuống 43.2% tham số, đều đạt 200/200. **Không có cấu
-hình nào chạm điểm suy giảm.** v8 và v9 gần như ngang nhau trên mọi trục (49.0% vs
-47.6% params, 26.6 vs 26.5 ms) vì phần lớn chi phí compute đã bị cắt ở DiT (32→4);
-chênh lệch giữa chúng nằm trong biên độ nhiễu đo (xem cảnh báo ở trên).
-
-
-
-## Việc còn mở
-
-1. **Chuyển sang LIBERO Spatial / Goal** để tìm điểm suy giảm — Object đã bão hoà, tiếp
-   tục cắt sâu trên Object chỉ tạo thêm các dòng "100%" giống nhau, không dựng được
-   đường cong accuracy-vs-compression.
-2. **Đo lại latency cho base / anchor / v6** — ba checkpoint này đo cùng phiên với lần
-   đo lỗi của v7 (đã phát hiện lệch 4.3 ms) nên nhiều khả năng cũng bị báo cao. Đo lại
-   trong cùng phiên với v7-mới/v8/v9/v10, 3 lần mỗi checkpoint.
-3. **Tìm nguyên nhân Data Processing 5.54 ms của v10** — kiểm tra có job training chạy
-   song song lúc benchmark không, hoặc so `processor_config.json` của v10 với các
-   checkpoint khác.
-4. Nếu vẫn muốn cắt sâu hơn trên trục DiT: nới `_required_prune_group_size()` từ nhóm-4
-   xuống nhóm-2 (ràng buộc cứng thật sự chỉ là nhóm-2 để self/cross khớp shape; nhóm-4
-   chỉ là ràng buộc mềm về xen kẽ text/image) để thử DiT=2. Lưu ý sàn cứng 30.5% ở
-   trên: dư địa còn lại chỉ 12.7 điểm phần trăm, nên lợi ích biên đang giảm nhanh.

@@ -1,8 +1,13 @@
 #!/usr/bin/env bash
-# Run gr00t/eval/rollout_policy.py once per LIBERO Object-suite task (10 tasks)
-# against an already-running policy server, and print a pooled success rate
-# across the whole suite (matching the "197/200" convention used in
+# Run gr00t/eval/rollout_policy.py once per task of a LIBERO suite against an
+# already-running policy server, and print a pooled success rate across the
+# whole suite (matching the "197/200" convention used in
 # examples/LIBERO/README.md).
+#
+# The task list is read from the suite's BDDL directory rather than hard-coded,
+# so it can never drift from the simulator's actual tasks -- a hard-coded list
+# copied between suites silently evaluates a policy on the wrong scenes, which
+# looks exactly like a broken policy (0% on every task).
 #
 # Prereqs:
 #   - A policy server must already be running (see examples/LIBERO/README.md,
@@ -14,7 +19,11 @@
 #   - The LIBERO sim venv must be set up (bash gr00t/eval/sim/LIBERO/setup_libero.sh).
 #
 # Usage:
-#   bash gr00t/eval/sim/LIBERO/run_object_suite.sh [--log-dir <path>]
+#   bash gr00t/eval/sim/LIBERO/run_libero_suite.sh --suite spatial [--log-dir <path>]
+#
+#   --suite   one of: object, spatial, goal, 10   (required)
+#   --log-dir where to write per-task logs and videos
+#             (default: eval_logs/libero_<suite>_<timestamp>)
 #
 # Env vars (all optional, matching rollout_policy.py's own flags):
 #   POLICY_CLIENT_HOST (default 127.0.0.1)
@@ -30,6 +39,7 @@ set -uo pipefail
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 PROJECT_ROOT="$SCRIPT_DIR/../../../.."
 LIBERO_PYTHON="$SCRIPT_DIR/libero_uv/.venv/bin/python"
+BDDL_ROOT="$PROJECT_ROOT/external_dependencies/LIBERO/libero/libero/bddl_files"
 
 POLICY_CLIENT_HOST="${POLICY_CLIENT_HOST:-127.0.0.1}"
 POLICY_CLIENT_PORT="${POLICY_CLIENT_PORT:-5555}"
@@ -38,36 +48,59 @@ N_ENVS="${N_ENVS:-8}"
 N_ACTION_STEPS="${N_ACTION_STEPS:-8}"
 MAX_EPISODE_STEPS="${MAX_EPISODE_STEPS:-720}"
 POLICY_CLIENT_TIMEOUT_MS="${POLICY_CLIENT_TIMEOUT_MS:-60000}"
-LOG_DIR="eval_logs/libero_object_$(date +%Y%m%d_%H%M%S)"
+SUITE=""
+LOG_DIR=""
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
+        --suite)
+            SUITE="$2"
+            shift 2
+            ;;
         --log-dir)
             LOG_DIR="$2"
             shift 2
             ;;
         *)
             echo "Unknown argument: $1" >&2
+            echo "Usage: $0 --suite {object|spatial|goal|10} [--log-dir <path>]" >&2
             exit 1
             ;;
     esac
 done
 
-# Official 10 tasks of the LIBERO Object suite (examples/LIBERO/README.md).
-TASKS=(
-    "pick_up_the_alphabet_soup_and_place_it_in_the_basket"
-    "pick_up_the_cream_cheese_and_place_it_in_the_basket"
-    "pick_up_the_salad_dressing_and_place_it_in_the_basket"
-    "pick_up_the_bbq_sauce_and_place_it_in_the_basket"
-    "pick_up_the_ketchup_and_place_it_in_the_basket"
-    "pick_up_the_tomato_sauce_and_place_it_in_the_basket"
-    "pick_up_the_butter_and_place_it_in_the_basket"
-    "pick_up_the_milk_and_place_it_in_the_basket"
-    "pick_up_the_chocolate_pudding_and_place_it_in_the_basket"
-    "pick_up_the_orange_juice_and_place_it_in_the_basket"
-)
+if [ -z "$SUITE" ]; then
+    echo "Missing required --suite {object|spatial|goal|10}" >&2
+    exit 1
+fi
+
+SUITE_DIR="$BDDL_ROOT/libero_$SUITE"
+if [ ! -d "$SUITE_DIR" ]; then
+    echo "No BDDL directory for suite '$SUITE' at $SUITE_DIR" >&2
+    echo "Available suites:" >&2
+    for d in "$BDDL_ROOT"/libero_*/; do
+        name="$(basename "$d")"
+        echo "  ${name#libero_}" >&2
+    done
+    exit 1
+fi
+
+# Task names are the BDDL filenames, which is exactly what rollout_policy.py's
+# --env-name resolves against.
+TASKS=()
+while IFS= read -r f; do
+    TASKS+=("$(basename "$f" .bddl)")
+done < <(find "$SUITE_DIR" -maxdepth 1 -name '*.bddl' | sort)
+
+if [ "${#TASKS[@]}" -eq 0 ]; then
+    echo "No .bddl files found in $SUITE_DIR" >&2
+    exit 1
+fi
+
+[ -z "$LOG_DIR" ] && LOG_DIR="eval_logs/libero_${SUITE}_$(date +%Y%m%d_%H%M%S)"
 
 mkdir -p "$LOG_DIR"
+echo "Suite : libero_$SUITE (${#TASKS[@]} tasks, from $SUITE_DIR)"
 echo "Logs -> $LOG_DIR"
 echo "Server: tcp://$POLICY_CLIENT_HOST:$POLICY_CLIENT_PORT | n_episodes/task=$N_EPISODES n_envs=$N_ENVS"
 echo
@@ -115,7 +148,7 @@ for task in "${TASKS[@]}"; do
 done
 
 echo
-echo "==================== SUMMARY ===================="
+echo "==================== SUMMARY (libero_$SUITE) ===================="
 for i in "${!TASK_NAMES[@]}"; do
     printf "%-70s %s\n" "${TASK_NAMES[$i]}" "${TASK_RATES[$i]}"
 done
