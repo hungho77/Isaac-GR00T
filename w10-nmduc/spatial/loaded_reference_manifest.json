@@ -1,0 +1,26 @@
+[
+  {
+    "variant": "baseline",
+    "reference_json": "/kaggle/input/datasets/nguyentrangntkt/spatial/gr00t_n1d7_libero_spatial_baseline_reference/gr00t_n1d7_libero_spatial_baseline_reference/baseline_reference.json",
+    "per_step_csv": "/kaggle/input/datasets/nguyentrangntkt/spatial/gr00t_n1d7_libero_spatial_baseline_reference/gr00t_n1d7_libero_spatial_baseline_reference/baseline_per_step.csv",
+    "per_task_csv": "/kaggle/input/datasets/nguyentrangntkt/spatial/gr00t_n1d7_libero_spatial_baseline_reference/gr00t_n1d7_libero_spatial_baseline_reference/baseline_per_task.csv"
+  },
+  {
+    "variant": "p25",
+    "reference_json": "/kaggle/input/datasets/nguyentrangntkt/spatial/gr00t_n1d7_libero_spatial_cka_p25_reference_3k/gr00t_n1d7_libero_spatial_cka_p25_reference_3k/p25_reference.json",
+    "per_step_csv": "/kaggle/input/datasets/nguyentrangntkt/spatial/gr00t_n1d7_libero_spatial_cka_p25_reference_3k/gr00t_n1d7_libero_spatial_cka_p25_reference_3k/p25_per_step.csv",
+    "per_task_csv": "/kaggle/input/datasets/nguyentrangntkt/spatial/gr00t_n1d7_libero_spatial_cka_p25_reference_3k/gr00t_n1d7_libero_spatial_cka_p25_reference_3k/p25_per_task.csv"
+  },
+  {
+    "variant": "p37",
+    "reference_json": "/kaggle/input/datasets/nguyentrangntkt/spatial/gr00t_n1d7_libero_spatial_cka_p37_reference_3k/gr00t_n1d7_libero_spatial_cka_p37_reference_3k/p37_reference.json",
+    "per_step_csv": "/kaggle/input/datasets/nguyentrangntkt/spatial/gr00t_n1d7_libero_spatial_cka_p37_reference_3k/gr00t_n1d7_libero_spatial_cka_p37_reference_3k/p37_per_step.csv",
+    "per_task_csv": "/kaggle/input/datasets/nguyentrangntkt/spatial/gr00t_n1d7_libero_spatial_cka_p37_reference_3k/gr00t_n1d7_libero_spatial_cka_p37_reference_3k/p37_per_task.csv"
+  },
+  {
+    "variant": "p50",
+    "reference_json": "/kaggle/input/datasets/nguyentrangntkt/spatial/gr00t_n1d7_libero_spatial_cka_p50_reference_3k/gr00t_n1d7_libero_spatial_cka_p50_reference_3k/p50_reference.json",
+    "per_step_csv": "/kaggle/input/datasets/nguyentrangntkt/spatial/gr00t_n1d7_libero_spatial_cka_p50_reference_3k/gr00t_n1d7_libero_spatial_cka_p50_reference_3k/p50_per_step.csv",
+    "per_task_csv": "/kaggle/input/datasets/nguyentrangntkt/spatial/gr00t_n1d7_libero_spatial_cka_p50_reference_3k/gr00t_n1d7_libero_spatial_cka_p50_reference_3k/p50_per_task.csv"
+  }
+]
