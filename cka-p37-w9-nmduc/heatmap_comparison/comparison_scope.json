@@ -1,5 +1,0 @@
-{
-  "baseline_representation": "original pretrained source before pruning",
-  "optimized_representation": "P37 candidate after 3000-step LoRA recovery",
-  "not_the_external_baseline_3k": true
-}
