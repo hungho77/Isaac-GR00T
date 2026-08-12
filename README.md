@@ -95,6 +95,69 @@ GR00T_GRIPPER_SIGNED=1 bash gr00t/eval/sim/LIBERO/run_object_suite.sh --log-dir 
 > đúng lúc cần kẹp lại và success rate về 0%. Chi tiết ở
 > [PRUNING_REPORT.md](PRUNING_REPORT.md) mục 1.4.
 
+### UR10e
+
+Cấu hình v10 áp lên dataset UR10e + Robotiq (81 episode,
+7 kênh: 6 khớp + gripper nhị phân). Config đã có sẵn: `examples/UR10e/modality.json`
+và `examples/UR10e/ur10e_config.py`.
+
+```bash
+# 1. Tach held-out (15/81 episode) -- repo khong ho tro validation split
+uv run python scripts/split_lerobot_dataset.py \
+    --dataset-path <dataset_dir> --output-dir <train_dir> --holdout 15
+
+# 2. Train tu base tong quat (KHONG dung checkpoint LIBERO)
+NUM_GPUS=1 MAX_STEPS=10000 GLOBAL_BATCH_SIZE=32 USE_WANDB=0 \
+uv run bash examples/finetune.sh \
+    --base-model-path checkpoints/GR00T-N1.7-3B \
+    --dataset-path <train_dir> \
+    --modality-config-path examples/UR10e/ur10e_config.py \
+    --embodiment-tag NEW_EMBODIMENT \
+    --output-dir <output_dir> \
+    -- --prune_model \
+       --kept_layer_idx_list_backbone 0,1,9,15 \
+       --kept_layer_idx_list_dit 0,1,2,3 \
+       --kept_layer_idx_list_vl_self_attn 0,2
+
+# 3. Eval open-loop tren dataset GOC, chi episode held-out
+uv run python gr00t/eval/open_loop_eval.py \
+    --dataset-path <dataset_dir> --embodiment-tag NEW_EMBODIMENT \
+    --model-path <output_dir>/checkpoint-10000 \
+    --traj-ids 66 67 68 69 70 71 72 73 74 75 76 77 78 79 80 \
+    --execution-horizon 16 --steps 400 --save-plot-path <plot_dir>
+```
+
+### Host model lên server
+
+```bash
+uv run python gr00t/eval/run_gr00t_server.py \
+    --model-path <checkpoint_dir> \
+    --embodiment-tag NEW_EMBODIMENT \
+    --modality-config-path examples/UR10e/ur10e_config.py \
+    --host 0.0.0.0 --port 5555
+```
+
+`--modality-config-path` là **bắt buộc** với `NEW_EMBODIMENT`: repo không có config
+dựng sẵn cho embodiment này, thiếu cờ thì server không biết bố cục 7 kênh / 2 camera.
+Không dùng `--use-sim-policy-wrapper` (cờ đó chỉ để nối vào sim LIBERO).
+
+Client gửi observation khớp `modality.json`, nhận về action chunk 16 bước:
+
+```python
+obs = {
+    "video.side":  np.uint8 (T, 480, 640, 3),
+    "video.wrist": np.uint8 (T, 480, 640, 3),
+    "state.single_arm": np.float32 (T, 6),   # goc khop, radian
+    "state.gripper":    np.float32 (T, 1),   # 0/1
+    "annotation.human.task_description": ["pick up the cup"],
+}
+# -> action.single_arm (16, 6), action.gripper (16, 1)
+```
+
+> `single_arm` được cấu hình `RELATIVE`: giá trị trả về là **delta so với state hiện
+> tại**, phải cộng vào góc khớp hiện tại trước khi gửi xuống controller. `gripper` là
+> `ABSOLUTE`, dùng thẳng. Mẫu client tham khảo: `gr00t/eval/real_robot/SO100`.
+
 ### Đo tham số và latency
 
 ```bash
