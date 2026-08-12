@@ -114,6 +114,12 @@ class Gr00tN1d7Config(PretrainedConfig):
     tune_diffusion_model: bool = True
     tune_vlln: bool = True
 
+    # Optional CKA structural-pruning manifest. A pruned checkpoint persists
+    # this object so its reduced ModuleLists are rebuilt before state-dict load.
+    # For recovery training from the full NVIDIA checkpoint, launch_finetune
+    # loads the full weights first and the pipeline applies this manifest after.
+    cka_pruning_manifest: dict | None = None
+
     # State augmentation parameters
     state_dropout_prob: float = 0.8  # State dropout probability
     exclude_state: bool = False  # Zero out all state inputs (ablation)

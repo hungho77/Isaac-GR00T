@@ -12,6 +12,11 @@ If you already have a dataset in the LeRobot v2 format, you can skip this sectio
 
 If you have a dataset in the LeRobot v3.0 format, please use [this script](../scripts/lerobot_conversion/convert_v3_to_v2.py) to convert it to the LeRobot v2 format.
 
+Robot-specific action semantics still need an explicit modality mapping and
+validation after the layout conversion. See the validated
+[UR10e + Robotiq cup-picking recipe](../examples/UR10eCup/README.md) for an
+example that pins the source revision and verifies absolute action alignment.
+
 > **Why LeRobot v2?** GR00T currently uses the LeRobot v2 data format because many upstream datasets (DROID, LIBERO, Bridge, etc.) are published in v2. We plan to support both v2 and v3 formats natively in a future release. For now, please convert v3 datasets to v2 using the script above.
 
 If you have a dataset in another format, please convert it to the LeRobot v2 format satisfying the following requirements.

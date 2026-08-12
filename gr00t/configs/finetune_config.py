@@ -45,6 +45,9 @@ class FinetuneConfig:
     If None, use the pre-registered modality config in `gr00t/configs/data/embodiment_configs.py`. 
     """
 
+    cka_pruning_manifest_path: str | None = None
+    """Optional CKA manifest. Full base weights are loaded before structural pruning."""
+
     # --- Model Tuning Flags ---
     tune_llm: bool = False
     """If True, fine-tune the language model (LLM) backbone during training."""
@@ -57,6 +60,9 @@ class FinetuneConfig:
 
     tune_diffusion_model: bool = True
     """If True, fine-tune the diffusion-based action decoder (if present in the model)."""
+
+    tune_vlln: bool = True
+    """If True, fine-tune VL layer norm and the VL self-attention adapter."""
 
     state_dropout_prob: float = 0.2
     """
@@ -131,6 +137,10 @@ class FinetuneConfig:
     learning_rate: float = 1e-4
     """Initial learning rate for optimizer."""
 
+    optim: str = "adamw_torch"
+    """Transformers optimizer name. Keep this identical between baseline and
+    CKA runs; changing it is an additional experimental intervention."""
+
     gradient_accumulation_steps: int = 1
     """Forward passes per optimizer step. Multiplies ``global_batch_size`` to
     produce the post-accumulation per-optimizer-step batch."""
@@ -163,6 +173,13 @@ class FinetuneConfig:
     max_steps: int = 10000
     """Total number of training steps to run before stopping."""
 
+    lr_scheduler_total_steps: int | None = None
+    """Total horizon used by the learning-rate scheduler. Set this to the final
+    recovery target (for example 3000) when a run is deliberately split into
+    shorter ``max_steps`` stages. This keeps LR values consistent with one
+    uninterrupted schedule; it does not make the iterable-data order bitwise
+    identical across process restarts."""
+
     weight_decay: float = 1e-5
     """Weight decay coefficient for optimizer (L2 regularization)."""
 
@@ -191,12 +208,25 @@ class FinetuneConfig:
     silently merging with a previous experiment. Incompatible with
     ``save_only_model=True`` (enforced by ``experiment.run``)."""
 
+    exact_data_resume: bool = False
+    """If True, replay/skip the deterministic iterable stream on resume so a
+    staged run follows the uninterrupted sample order. This can be slow for
+    video datasets. False uses a reproducible stage-specific reseed."""
+
     skip_weight_loading: bool = False
     """If True, skip loading model weights from base_model_path (architecture only).
     The processor (tokenizer/config) is still loaded from base_model_path.
     Useful for CI/testing to skip the slow checkpoint shard loading."""
 
     def __post_init__(self) -> None:
+        if (
+            self.lr_scheduler_total_steps is not None
+            and self.lr_scheduler_total_steps < self.max_steps
+        ):
+            raise ValueError(
+                "lr_scheduler_total_steps must be >= max_steps, got "
+                f"{self.lr_scheduler_total_steps} < {self.max_steps}"
+            )
         if self.gradient_accumulation_steps < 1:
             raise ValueError(
                 f"gradient_accumulation_steps must be >= 1, got {self.gradient_accumulation_steps}"

@@ -20,6 +20,7 @@ This module provides the core policy classes for running Gr00t models:
 - Gr00tSimPolicyWrapper: Wrapper for compatibility with existing Gr00t simulation environments
 """
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -104,12 +105,29 @@ class Gr00tPolicy(BasePolicy):
         if isinstance(embodiment_tag, str):
             embodiment_tag = EmbodimentTag.resolve(embodiment_tag)
         model_dir = Path(model_path)
+        if model_dir.is_absolute() and not model_dir.is_dir():
+            raise FileNotFoundError(
+                f"Local GR00T checkpoint directory does not exist: {model_dir}. "
+                "An absolute missing path must not be interpreted as a Hugging Face repo id."
+            )
+        model_source = model_dir if model_dir.is_dir() else model_path
 
-        # Load the pretrained model and move to target device with bfloat16 precision
-        model = AutoModel.from_pretrained(model_dir)
+        # T4 does not support FlashAttention 2 and should run the complete policy
+        # in FP16. Keeping one dtype also avoids Half/Float LayerNorm mismatches.
+        low_vram_t4 = os.environ.get("GR00T_LOW_VRAM_T4", "0").lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        inference_dtype = torch.float16 if low_vram_t4 else torch.bfloat16
+
+        # Load the pretrained model and move it to the target device.
+        model = AutoModel.from_pretrained(model_source)
         model.eval()  # Set model to evaluation mode
-        model.to(device=device, dtype=torch.bfloat16)
+        model.to(device=device, dtype=inference_dtype)
         self.model = model
+        self.inference_dtype = inference_dtype
 
         # Load the processor for input/output transformation.
         # Training saves processor files under a "processor/" subdirectory, but
@@ -121,7 +139,8 @@ class Gr00tPolicy(BasePolicy):
             and not (model_dir / "processor_config.json").exists()
             else model_dir
         )
-        self.processor: BaseProcessor = AutoProcessor.from_pretrained(processor_dir)
+        processor_source = processor_dir if model_dir.is_dir() else model_path
+        self.processor: BaseProcessor = AutoProcessor.from_pretrained(processor_source)
         self.processor.eval()
 
         # Store embodiment-specific configurations
@@ -410,7 +429,10 @@ class Gr00tPolicy(BasePolicy):
 
         # Step 3: Collate processed inputs into a single batch for model
         collated_inputs = self.collate_fn(processed_inputs)
-        collated_inputs = _rec_to_dtype(collated_inputs, dtype=torch.bfloat16)
+        # Match the model dtype. This is FP16 on T4 and BF16 on supported GPUs;
+        # hard-coding BF16 here caused Half/BFloat16 LayerNorm failures after
+        # the T4 model was correctly converted to FP16.
+        collated_inputs = _rec_to_dtype(collated_inputs, dtype=self.inference_dtype)
 
         # Step 4: Run model inference to predict actions
         with torch.inference_mode():

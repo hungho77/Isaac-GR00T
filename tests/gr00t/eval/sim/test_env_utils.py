@@ -48,6 +48,7 @@ class TestEnvPrefixMapping:
             "simpler_env_google",
             "simpler_env_widowx",
             "libero_sim",
+            "ur10e_cup_sim",
         }
         assert set(ENV_PREFIX_TO_EMBODIMENT_TAG.keys()) == expected_prefixes
 
@@ -96,6 +97,10 @@ class TestGetEmbodimentTagFromEnvName:
     def test_libero_panda(self):
         tag = get_embodiment_tag_from_env_name("libero_sim/KITCHEN_SCENE3_pick_up_the_black_bowl")
         assert tag == EmbodimentTag.LIBERO_PANDA
+
+    def test_ur10e_cup(self):
+        tag = get_embodiment_tag_from_env_name("ur10e_cup_sim/pick_up_the_cup")
+        assert tag == EmbodimentTag.NEW_EMBODIMENT
 
     def test_gr1_unified_maps_to_robocasa_gr1_tabletop(self):
         env_name = "gr1_unified/PnPBottleToCabinetClose_GR1ArmsAndWaistFourierHands_Env"

@@ -44,6 +44,8 @@ class TrainingConfig:
     # Optimization
     learning_rate: float = 1e-4
     lr_scheduler_type: str = "cosine"
+    lr_scheduler_total_steps: int | None = None
+    """Optional fixed LR-schedule horizon for staged/resumable training."""
     weight_decay: float = 1e-5
     warmup_ratio: float = 0.05
     warmup_steps: int = 0  # this will override warmup_ratio
@@ -74,6 +76,7 @@ class TrainingConfig:
 
     # Default False so a rerun against an existing output_dir starts fresh.
     resume_from_checkpoint: bool = False
+    exact_data_resume: bool = False
 
     # Checkpoint uploading
     upload_checkpoints: bool = False
@@ -149,6 +152,14 @@ class TrainingConfig:
         return global_batch * self.gradient_accumulation_steps
 
     def __post_init__(self) -> None:
+        if (
+            self.lr_scheduler_total_steps is not None
+            and self.lr_scheduler_total_steps < self.max_steps
+        ):
+            raise ValueError(
+                "lr_scheduler_total_steps must be >= max_steps, got "
+                f"{self.lr_scheduler_total_steps} < {self.max_steps}"
+            )
         if self.gradient_accumulation_steps < 1:
             raise ValueError(
                 f"gradient_accumulation_steps must be >= 1, got {self.gradient_accumulation_steps}"

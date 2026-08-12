@@ -248,6 +248,21 @@ def run(config: Config):
     pipeline = MODEL_REGISTRY.get(type(config.model))(config, save_cfg_dir)
     pipeline.setup()
     model = pipeline.return_model()
+    from gr00t.model.action_dit_lora import configure_action_dit_lora_from_env
+
+    recovery_dataset_paths = []
+    for dataset_config in config.data.datasets:
+        paths = (
+            dataset_config.dataset_paths
+            if hasattr(dataset_config, "dataset_paths")
+            else dataset_config.get("dataset_paths", [])
+        )
+        recovery_dataset_paths.extend(paths)
+    lora_metadata = configure_action_dit_lora_from_env(
+        model,
+        checkpoint_source=config.training.start_from_checkpoint,
+        dataset_paths=recovery_dataset_paths,
+    )
     train_dataset, eval_dataset = pipeline.return_dataset()
     data_collator = pipeline.return_collator()
     processor = pipeline.return_processor()
@@ -310,6 +325,34 @@ def run(config: Config):
         eval_dataset=eval_dataset,
         data_collator=data_collator,
         multiprocessing_context=config.data.multiprocessing_context,
+        lr_scheduler_total_steps=config.training.lr_scheduler_total_steps,
+        exact_data_resume=config.training.exact_data_resume,
+        resume_training_contract={
+            "data.seed": config.data.seed,
+            "training.learning_rate": config.training.learning_rate,
+            "training.lr_scheduler_type": (
+                config.training.lr_scheduler_type.value
+                if hasattr(config.training.lr_scheduler_type, "value")
+                else config.training.lr_scheduler_type
+            ),
+            "training.lr_scheduler_total_steps": config.training.lr_scheduler_total_steps,
+            "training.weight_decay": config.training.weight_decay,
+            "training.warmup_ratio": config.training.warmup_ratio,
+            "training.warmup_steps": config.training.warmup_steps,
+            "training.optim": (
+                config.training.optim.value
+                if hasattr(config.training.optim, "value")
+                else config.training.optim
+            ),
+            "training.gradient_accumulation_steps": (config.training.gradient_accumulation_steps),
+            "training.global_batch_size": config.training.global_batch_size,
+            "training.num_gpus": config.training.num_gpus,
+            "training.exact_data_resume": config.training.exact_data_resume,
+            "model.state_dropout_prob": config.model.state_dropout_prob,
+            "model.tune_vlln": config.model.tune_vlln,
+            "model.tune_projector": config.model.tune_projector,
+            "model.tune_diffusion_model": config.model.tune_diffusion_model,
+        },
     )
 
     trainer.add_callback(
@@ -366,9 +409,35 @@ def run(config: Config):
     else:
         trainer.train(resume_from_checkpoint=config.training.resume_from_checkpoint)
 
-    # Save final model
-    trainer.save_model()
-    logging.info(f"Model saved to {output_dir}")
+    # Adapter-only checkpoints are sufficient for intermediate hosted-notebook
+    # stages. Export a full root model only once, after merging at the final
+    # stage, to avoid duplicating multi-GiB frozen weights.
+    if lora_metadata.get("enabled"):
+        if os.environ.get("GR00T_ACTION_DIT_LORA_EXPORT_FINAL", "0") == "1":
+            from gr00t.model.action_dit_lora import merge_action_dit_lora_for_export
+
+            merge_metadata = merge_action_dit_lora_for_export(trainer.model)
+            trainer.save_model()
+            run_on_rank0(
+                (output_dir / "gr00t_lora_export.json").write_text,
+                json.dumps(merge_metadata, indent=2),
+                encoding="utf-8",
+                label="gr00t_lora_export.json write",
+            )
+            logging.info(f"Merged LoRA model saved to {output_dir}")
+        else:
+            logging.warning(
+                "Skipping merged root export for an intermediate LoRA stage; "
+                "resume from the latest checkpoint-* directory"
+            )
+    else:
+        trainer.save_model()
+        logging.info(f"Model saved to {output_dir}")
+
+    # ``save_model`` does not write TrainerState. Keep final provenance beside
+    # the root model so evaluation never needs notebook-side metadata copying
+    # or a fabricated training runtime.
+    trainer.save_state()
 
     if config.training.assert_loss_less_than is not None:
         final_loss = trainer.loss

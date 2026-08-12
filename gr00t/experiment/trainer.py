@@ -29,8 +29,10 @@ pipeline is bottlenecked by data loading or by the model's computation.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
+from pathlib import Path
 import queue
 import threading
 from typing import Any, Optional
@@ -164,7 +166,122 @@ class Gr00tTrainer(Trainer):
         """
         self.action_offset = kwargs.pop("action_offset", None)
         self.multiprocessing_context = kwargs.pop("multiprocessing_context", "fork")
+        self.lr_scheduler_total_steps = kwargs.pop("lr_scheduler_total_steps", None)
+        self.exact_data_resume = kwargs.pop("exact_data_resume", False)
+        self.resume_training_contract = kwargs.pop("resume_training_contract", {})
         super().__init__(*args, **kwargs)
+
+    def create_scheduler(self, num_training_steps: int, optimizer=None):
+        """Build a scheduler against the final recovery horizon.
+
+        ``TrainingArguments.max_steps`` may be a temporary stop point in a
+        hosted-notebook stage. A fixed total keeps LR values identical across
+        1000 -> 2000 -> 3000 resumes and a single uninterrupted 3000-step run.
+        """
+        scheduler_steps = self.lr_scheduler_total_steps or num_training_steps
+        if scheduler_steps < num_training_steps:
+            raise ValueError(
+                "lr_scheduler_total_steps cannot be shorter than the current training run: "
+                f"{scheduler_steps} < {num_training_steps}"
+            )
+        return super().create_scheduler(scheduler_steps, optimizer=optimizer)
+
+    def _validate_resumed_scheduler_horizon(self, checkpoint: str) -> None:
+        config_path = Path(checkpoint) / "experiment_cfg" / "conf.yaml"
+        if not config_path.is_file():
+            if self.lr_scheduler_total_steps is not None:
+                raise ValueError(
+                    f"Checkpoint {checkpoint} has no experiment_cfg/conf.yaml; cannot verify "
+                    "the fixed LR-scheduler horizon for an exact resume"
+                )
+            return
+        from omegaconf import OmegaConf
+
+        previous = OmegaConf.load(config_path)
+        previous_total = OmegaConf.select(
+            previous, "training.lr_scheduler_total_steps", default=None
+        )
+        if previous_total != self.lr_scheduler_total_steps:
+            raise ValueError(
+                "Refusing an LR-inconsistent resume: checkpoint "
+                f"lr_scheduler_total_steps={previous_total!r}, current run="
+                f"{self.lr_scheduler_total_steps!r}. Use the same final schedule horizon "
+                "for every stage."
+            )
+        mismatches = {}
+        for dotted_key, current_value in self.resume_training_contract.items():
+            previous_value = OmegaConf.select(previous, dotted_key, default=None)
+            if dotted_key == "training.exact_data_resume" and previous_value is None:
+                previous_value = False
+            if hasattr(previous_value, "value"):
+                previous_value = previous_value.value
+            if previous_value != current_value:
+                mismatches[dotted_key] = (previous_value, current_value)
+        if mismatches:
+            raise ValueError(
+                f"Refusing a resume with a different optimization/training contract: {mismatches}"
+            )
+
+    def _adapter_only_checkpoints_enabled(self) -> bool:
+        return os.environ.get("GR00T_ACTION_DIT_LORA_ADAPTER_CHECKPOINTS", "0") == "1"
+
+    def _save(self, output_dir: str | None = None, state_dict=None) -> None:
+        """Save compact LoRA state for numbered checkpoints only.
+
+        A normal/final ``save_model`` still delegates to Transformers so the
+        merged root export is a standalone checkpoint. This opt-in path is
+        deliberately limited to single-process training: silently emitting a
+        partial state from a sharded model would make resume irreproducible.
+        """
+        output_path = Path(output_dir or self.args.output_dir)
+        is_numbered_checkpoint = output_path.name.startswith("checkpoint-")
+        if not (self._adapter_only_checkpoints_enabled() and is_numbered_checkpoint):
+            return super()._save(output_dir=str(output_path), state_dict=state_dict)
+
+        if int(getattr(self.args, "world_size", 1)) != 1:
+            raise RuntimeError(
+                "Adapter-only Action-DiT LoRA checkpoints currently require world_size=1"
+            )
+
+        from safetensors.torch import save_file
+        from transformers.trainer import TRAINING_ARGS_NAME
+
+        from gr00t.model.action_dit_lora import ADAPTER_METADATA_NAME, adapter_checkpoint_metadata
+
+        root = self.model.module if hasattr(self.model, "module") else self.model
+        metadata = adapter_checkpoint_metadata(root)
+        trainable_names = set(metadata["trainable_parameter_names"])
+        adapter_state = {
+            name: parameter.detach().cpu().contiguous()
+            for name, parameter in root.named_parameters()
+            if name in trainable_names
+        }
+        missing = sorted(trainable_names.difference(adapter_state))
+        if missing:
+            raise RuntimeError(f"Trainable tensors missing from adapter checkpoint: {missing}")
+
+        output_path.mkdir(parents=True, exist_ok=True)
+        # Remove only known model-weight files from this exact checkpoint. A
+        # failed earlier full save must not leave shards that look resumable.
+        for pattern in (
+            "model*.safetensors",
+            "model.safetensors.index.json",
+            "pytorch_model*.bin",
+            "pytorch_model.bin.index.json",
+        ):
+            for stale_path in output_path.glob(pattern):
+                stale_path.unlink()
+        save_file(
+            adapter_state,
+            str(output_path / "model.safetensors"),
+            metadata={"format": "pt"},
+        )
+        (output_path / ADAPTER_METADATA_NAME).write_text(
+            json.dumps(metadata, indent=2), encoding="utf-8"
+        )
+        if hasattr(root, "config"):
+            root.config.save_pretrained(output_path)
+        torch.save(self.args, output_path / TRAINING_ARGS_NAME)
 
     def log(self, logs: dict[str, float], start_time: Optional[float] = None) -> None:
         # Hide epoch from logged metrics as it's misleading for Iterable datasets.
@@ -177,11 +294,12 @@ class Gr00tTrainer(Trainer):
         """Return a iterable dataloader without skipping the data during resume, but reseed the dataset instead."""
 
         # Fall back to default behaviour if not using the custom buffer.
-        # During resume, don't skip the data
-        self.args.ignore_data_skip = True
+        # Exact replay is scientifically cleaner but can be expensive for video
+        # datasets. Fast mode uses a deterministic stage-specific reseed.
+        self.args.ignore_data_skip = not self.exact_data_resume
         curr_global_step = self.state.global_step
         print(f"Current global step: {curr_global_step}")
-        if curr_global_step > 0:
+        if curr_global_step > 0 and not self.exact_data_resume:
             # ``new_seed`` MUST be the same on every rank: ``ShardedMixtureDataset``
             # builds its shard schedule from this seed and partitions disjointly
             # by index, so a per-rank delta here would cause sample duplication
@@ -191,7 +309,14 @@ class Gr00tTrainer(Trainer):
             new_seed = self.train_dataset.seed + curr_global_step
             self.train_dataset.reset_seed(new_seed)
             print(
-                f"Resetting seed to {new_seed}. Please note that this will make the experiment non-reproducible."
+                f"Resetting seed to {new_seed}. This stage is reproducible, but its data order "
+                "is not bitwise-equivalent to an uninterrupted run."
+            )
+        elif curr_global_step > 0:
+            logging.warning(
+                "Exact data resume enabled: replaying/skipping the deterministic iterable "
+                "stream to global step %s; startup may be slow",
+                curr_global_step,
             )
 
         print("Creating custom train dataloader")
@@ -239,6 +364,11 @@ class Gr00tTrainer(Trainer):
             latest_checkpoint = resume_from_checkpoint  # caller passed an explicit path
 
         if latest_checkpoint is not None:
+            latest_checkpoint = str(latest_checkpoint)
+            self._validate_resumed_scheduler_horizon(latest_checkpoint)
+            from gr00t.model.action_dit_lora import validate_adapter_checkpoint
+
+            validate_adapter_checkpoint(self.model, latest_checkpoint)
             logging.info(f"Resuming from checkpoint {latest_checkpoint}")
             # In case of repeating the find_executable_batch_size, set `self._train_batch_size` properly
             self.state = TrainerState.load_from_json(

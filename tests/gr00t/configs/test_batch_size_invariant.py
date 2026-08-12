@@ -48,3 +48,23 @@ def test_training_config_accumulated_mirrors_hf(kwargs, per_device, num_gpus, gr
         warnings.simplefilter("ignore")
         cfg = TrainingConfig(**kwargs)
     assert cfg.accumulated_batch_size == per_device * num_gpus * grad_accum
+
+
+def test_scheduler_total_steps_cannot_be_shorter_than_stage():
+    with pytest.raises(ValueError, match="lr_scheduler_total_steps must be >= max_steps"):
+        TrainingConfig(max_steps=2000, lr_scheduler_total_steps=1000)
+
+
+def test_scheduler_total_steps_supports_staged_recovery():
+    cfg = TrainingConfig(max_steps=1000, lr_scheduler_total_steps=3000)
+    assert cfg.lr_scheduler_total_steps == 3000
+
+
+def test_optimizer_is_explicit_and_stable():
+    cfg = TrainingConfig(optim="adamw_torch")
+    assert cfg.optim == "adamw_torch"
+
+
+def test_exact_data_resume_is_opt_in():
+    assert TrainingConfig().exact_data_resume is False
+    assert TrainingConfig(exact_data_resume=True).exact_data_resume is True

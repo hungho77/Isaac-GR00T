@@ -14,6 +14,7 @@
 # limitations under the License.
 
 import logging
+import os
 
 from huggingface_hub.errors import GatedRepoError
 import torch
@@ -163,9 +164,22 @@ class Qwen3Backbone(torch.nn.Module):
 
         super().__init__()
 
+        # T4 (Turing, compute capability 7.5) cannot execute FlashAttention 2.
+        # Keep this opt-in so upstream behavior is unchanged on newer GPUs.
+        low_vram_t4 = os.environ.get("GR00T_LOW_VRAM_T4", "0").lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+
         # Add attention kwargs
         extra_kwargs = {}
-        if use_flash_attention:
+        if low_vram_t4:
+            extra_kwargs["attn_implementation"] = "sdpa"
+            extra_kwargs["dtype"] = torch.float16
+            logger.info("GR00T_LOW_VRAM_T4 enabled: using SDPA and FP16 for Qwen3-VL")
+        elif use_flash_attention:
             try:
                 import flash_attn  # noqa: F401
 
@@ -176,8 +190,12 @@ class Qwen3Backbone(torch.nn.Module):
                     "Install flash-attn for better performance: pip install flash-attn"
                 )
                 extra_kwargs["attn_implementation"] = "sdpa"
-        if load_bf16:
-            extra_kwargs["torch_dtype"] = torch.bfloat16
+        elif load_bf16:
+            # ``dtype`` is the current Transformers API. More importantly, keep
+            # this mutually exclusive with the T4 override above: passing BF16
+            # after FP16 used to silently put the nested Qwen model back in an
+            # unsupported/mismatched dtype.
+            extra_kwargs["dtype"] = torch.bfloat16
 
         try:
             self.model = Qwen3VLForConditionalGeneration.from_pretrained(

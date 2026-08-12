@@ -53,6 +53,12 @@ ROBOCASA_RECORD_VIDEO_KEYS_BY_PREFIX = {
     "robocasa365_panda_omron": ROBOCASA365_PANDA_RECORD_VIDEO_KEYS,
 }
 
+UR10E_CUP_RECORD_VIDEO_KEYS = ("video.side", "video.wrist")
+RECORD_VIDEO_KEYS_BY_PREFIX = {
+    **ROBOCASA_RECORD_VIDEO_KEYS_BY_PREFIX,
+    "ur10e_cup_sim": UR10E_CUP_RECORD_VIDEO_KEYS,
+}
+
 # Canonical per-episode step budget for the default (LIBERO) backend. Kept in one
 # place so the CLI, video, and multi-step defaults cannot drift.
 DEFAULT_MAX_EPISODE_STEPS = 720
@@ -133,6 +139,16 @@ def get_libero_env_fn(
     return env_fn
 
 
+def get_ur10e_cup_env_fn(env_name: str):
+    def env_fn():
+        from gr00t.eval.sim.UR10eCup import register_ur10e_cup_envs
+
+        register_ur10e_cup_envs()
+        return gym.make(env_name)
+
+    return env_fn
+
+
 def get_robocasa_env_fn(
     env_name: str,
     robocasa_split: str = "",
@@ -168,6 +184,9 @@ def get_gym_env(env_name: str, env_idx: int, total_n_envs: int, robocasa_split: 
     elif env_embodiment in (EmbodimentTag.LIBERO_PANDA,):
         env_fn = get_libero_env_fn(env_name)
 
+    elif env_prefix == "ur10e_cup_sim":
+        env_fn = get_ur10e_cup_env_fn(env_name)
+
     else:
         raise ValueError(f"Invalid environment name: {env_name}")
 
@@ -198,7 +217,7 @@ def create_eval_env(
         record_video_keys = wrapper_configs.video.record_video_keys
         env_prefix = env_name.split("/")[0]
         if record_video_keys is None:
-            record_video_keys = ROBOCASA_RECORD_VIDEO_KEYS_BY_PREFIX.get(env_prefix)
+            record_video_keys = RECORD_VIDEO_KEYS_BY_PREFIX.get(env_prefix)
 
         env = VideoRecordingWrapper(
             env,
@@ -278,6 +297,20 @@ def _macro_step_env_steps(env_infos: dict, env_idx: int) -> int:
     return 0
 
 
+def _coerce_success(value: Any) -> bool:
+    """Reduce scalar or array-like simulator success values to one bool."""
+
+    if value is None:
+        return False
+    if isinstance(value, (bool, np.bool_)):
+        return bool(value)
+    if isinstance(value, (int, np.integer)):
+        return bool(value)
+    if isinstance(value, (list, tuple, np.ndarray)):
+        return bool(np.any(value))
+    raise ValueError(f"Unknown success dtype: {type(value)}")
+
+
 def _collect_rollout_episodes(
     env,
     policy: BasePolicy,
@@ -318,42 +351,22 @@ def _collect_rollout_episodes(
             # but in the future if we need policy to be stateful, we need to detect env reset and call policy.reset()
             for env_idx in range(n_envs):
                 if "success" in env_infos:
-                    env_success = env_infos["success"][env_idx]
-                    if isinstance(env_success, list):
-                        env_success = np.any(env_success)
-                    elif isinstance(env_success, np.ndarray):
-                        env_success = np.any(env_success)
-                    elif isinstance(env_success, bool):
-                        env_success = env_success
-                    elif isinstance(env_success, int):
-                        env_success = bool(env_success)
-                    else:
-                        raise ValueError(f"Unknown success dtype: {type(env_success)}")
-                    current_successes[env_idx] |= bool(env_success)
+                    current_successes[env_idx] |= _coerce_success(env_infos["success"][env_idx])
                 else:
                     current_successes[env_idx] = False
 
                 if "final_info" in env_infos and env_infos["final_info"][env_idx] is not None:
-                    env_success = env_infos["final_info"][env_idx]["success"]
-                    if isinstance(env_success, list):
-                        env_success = any(env_success)
-                    elif isinstance(env_success, np.ndarray):
-                        env_success = np.any(env_success)
-                    elif isinstance(env_success, bool):
-                        env_success = env_success
-                    elif isinstance(env_success, int):
-                        env_success = bool(env_success)
-                    else:
-                        raise ValueError(f"Unknown success dtype: {type(env_success)}")
-                    current_successes[env_idx] |= bool(env_success)
+                    current_successes[env_idx] |= _coerce_success(
+                        env_infos["final_info"][env_idx].get("success")
+                    )
                 current_rewards[env_idx] += rewards[env_idx]
                 current_lengths[env_idx] += _macro_step_env_steps(env_infos, env_idx)
 
                 # If episode ended, store results
                 if terminations[env_idx] or truncations[env_idx]:
-                    if "final_info" in env_infos:
-                        current_successes[env_idx] |= any(
-                            env_infos["final_info"][env_idx]["success"]
+                    if "final_info" in env_infos and env_infos["final_info"][env_idx] is not None:
+                        current_successes[env_idx] |= _coerce_success(
+                            env_infos["final_info"][env_idx].get("success")
                         )
                     if "task_progress" in env_infos:
                         episode_infos["task_progress"].append(

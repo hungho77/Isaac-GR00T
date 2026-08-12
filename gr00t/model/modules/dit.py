@@ -24,6 +24,7 @@ from diffusers.models.embeddings import SinusoidalPositionalEmbedding, TimestepE
 import torch
 from torch import nn
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint
 
 
 def _is_spark_sm121() -> bool:
@@ -55,6 +56,84 @@ def _sdpa_context():
         enable_math=True,
         enable_mem_efficient=False,
         enable_cudnn=False,
+    )
+
+
+def _activation_checkpointing_enabled(*tensors: torch.Tensor | None) -> bool:
+    default = os.environ.get("GR00T_LOW_VRAM_T4", "0")
+    enabled = os.environ.get("GR00T_ACTIVATION_CHECKPOINTING", default).lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    return enabled and torch.is_grad_enabled() and any(
+        tensor is not None and tensor.requires_grad for tensor in tensors
+    )
+
+
+def _run_dit_block(
+    block: nn.Module,
+    hidden_states: torch.Tensor,
+    encoder_hidden_states: torch.Tensor | None,
+    encoder_attention_mask: torch.Tensor | None,
+    temb: torch.Tensor,
+) -> torch.Tensor:
+    if not _activation_checkpointing_enabled(hidden_states, encoder_hidden_states, temb):
+        return block(
+            hidden_states,
+            attention_mask=None,
+            encoder_hidden_states=encoder_hidden_states,
+            encoder_attention_mask=encoder_attention_mask,
+            temb=temb,
+        )
+
+    if encoder_hidden_states is None:
+        def forward_self(states, time_embedding):
+            return block(
+                states,
+                attention_mask=None,
+                encoder_hidden_states=None,
+                encoder_attention_mask=None,
+                temb=time_embedding,
+            )
+
+        return checkpoint(forward_self, hidden_states, temb, use_reentrant=False)
+
+    if encoder_attention_mask is None:
+        def forward_cross(states, encoder_states, time_embedding):
+            return block(
+                states,
+                attention_mask=None,
+                encoder_hidden_states=encoder_states,
+                encoder_attention_mask=None,
+                temb=time_embedding,
+            )
+
+        return checkpoint(
+            forward_cross,
+            hidden_states,
+            encoder_hidden_states,
+            temb,
+            use_reentrant=False,
+        )
+
+    def forward_masked_cross(states, encoder_states, encoder_mask, time_embedding):
+        return block(
+            states,
+            attention_mask=None,
+            encoder_hidden_states=encoder_states,
+            encoder_attention_mask=encoder_mask,
+            temb=time_embedding,
+        )
+
+    return checkpoint(
+        forward_masked_cross,
+        hidden_states,
+        encoder_hidden_states,
+        encoder_attention_mask,
+        temb,
+        use_reentrant=False,
     )
 
 
@@ -304,27 +383,29 @@ class DiT(ModelMixin, ConfigMixin):
         hidden_states = hidden_states.contiguous()
         encoder_hidden_states = encoder_hidden_states.contiguous()
 
-        all_hidden_states = [hidden_states]
+        all_hidden_states = [hidden_states] if return_all_hidden_states else None
 
         # Process through transformer blocks
         for idx, block in enumerate(self.transformer_blocks):
-            if idx % 2 == 1 and self.config.interleave_self_attention:
-                hidden_states = block(
+            topology_idx = getattr(block, "_gr00t_original_index", idx)
+            if topology_idx % 2 == 1 and self.config.interleave_self_attention:
+                hidden_states = _run_dit_block(
+                    block,
                     hidden_states,
-                    attention_mask=None,
-                    encoder_hidden_states=None,
-                    encoder_attention_mask=None,
-                    temb=temb,
+                    None,
+                    None,
+                    temb,
                 )
             else:
-                hidden_states = block(
+                hidden_states = _run_dit_block(
+                    block,
                     hidden_states,
-                    attention_mask=None,
-                    encoder_hidden_states=encoder_hidden_states,
-                    encoder_attention_mask=None,
-                    temb=temb,
+                    encoder_hidden_states,
+                    None,
+                    temb,
                 )
-            all_hidden_states.append(hidden_states)
+            if all_hidden_states is not None:
+                all_hidden_states.append(hidden_states)
 
         # Output processing
         conditioning = temb
@@ -372,37 +453,42 @@ class AlternateVLDiT(DiT):
         image_attention_mask = image_mask & backbone_attention_mask
         non_image_attention_mask = (~image_mask) & backbone_attention_mask
 
-        all_hidden_states = [hidden_states]
+        all_hidden_states = [hidden_states] if return_all_hidden_states else None
         assert self.config.interleave_self_attention, "Interleave self attention must be enabled"
 
         # Process through transformer blocks
         for idx, block in enumerate(self.transformer_blocks):
-            if idx % 2 == 1:
+            # Structural pruning renumbers ModuleList positions. Preserve each
+            # retained block's original self/cross and image/text role instead
+            # of silently changing behavior based on its new list index.
+            topology_idx = getattr(block, "_gr00t_original_index", idx)
+            if topology_idx % 2 == 1:
                 # Self-attention blocks
-                hidden_states = block(
+                hidden_states = _run_dit_block(
+                    block,
                     hidden_states,
-                    attention_mask=None,
-                    encoder_hidden_states=None,
-                    encoder_attention_mask=None,
-                    temb=temb,
+                    None,
+                    None,
+                    temb,
                 )
             else:
                 # Cross-attention blocks - alternate between non-image and image tokens
-                if idx % (2 * self.attend_text_every_n_blocks) == 0:
+                if topology_idx % (2 * self.attend_text_every_n_blocks) == 0:
                     # Attend to non-image tokens
                     curr_encoder_attention_mask = non_image_attention_mask
                 else:
                     # Attend to image tokens
                     curr_encoder_attention_mask = image_attention_mask
 
-                hidden_states = block(
+                hidden_states = _run_dit_block(
+                    block,
                     hidden_states,
-                    attention_mask=None,
-                    encoder_hidden_states=encoder_hidden_states,
-                    encoder_attention_mask=curr_encoder_attention_mask,
-                    temb=temb,
+                    encoder_hidden_states,
+                    curr_encoder_attention_mask,
+                    temb,
                 )
-            all_hidden_states.append(hidden_states)
+            if all_hidden_states is not None:
+                all_hidden_states.append(hidden_states)
 
         # Output processing
         conditioning = temb
@@ -470,12 +556,16 @@ class SelfAttentionTransformer(ModelMixin, ConfigMixin):
     ):
         # Process through transformer blocks - single pass through the blocks
         hidden_states = hidden_states.contiguous()
-        all_hidden_states = [hidden_states]
+        all_hidden_states = [hidden_states] if return_all_hidden_states else None
 
         # Process through transformer blocks
-        for idx, block in enumerate(self.transformer_blocks):
-            hidden_states = block(hidden_states)
-            all_hidden_states.append(hidden_states)
+        for block in self.transformer_blocks:
+            if _activation_checkpointing_enabled(hidden_states):
+                hidden_states = checkpoint(block, hidden_states, use_reentrant=False)
+            else:
+                hidden_states = block(hidden_states)
+            if all_hidden_states is not None:
+                all_hidden_states.append(hidden_states)
 
         if return_all_hidden_states:
             return hidden_states, all_hidden_states

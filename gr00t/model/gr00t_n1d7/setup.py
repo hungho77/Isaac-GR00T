@@ -44,6 +44,23 @@ def convert_tensors_to_lists(obj):
         return obj
 
 
+def _resolve_checkpoint_source(value: str | None) -> str | Path | None:
+    """Keep Hub ids intact while failing fast for missing local paths."""
+    if value is None:
+        return None
+    path = Path(value).expanduser()
+    if path.exists():
+        if not path.is_dir():
+            raise NotADirectoryError(f"GR00T checkpoint is not a directory: {path}")
+        return path
+    if path.is_absolute() or value.startswith(("./", "../", ".\\", "..\\", "~")):
+        raise FileNotFoundError(
+            f"Local GR00T checkpoint directory does not exist: {path}. "
+            "Refusing to reinterpret a missing local path as a Hugging Face repo id."
+        )
+    return value
+
+
 class Gr00tN1d7Pipeline(ModelPipeline):
     model_class = Gr00tN1d7
     processor_class = Gr00tN1d7Processor
@@ -65,6 +82,9 @@ class Gr00tN1d7Pipeline(ModelPipeline):
             transformers_loading_kwargs["token"] = self.config.training.transformers_access_token
 
         self.transformers_loading_kwargs = transformers_loading_kwargs
+        self.checkpoint_source = _resolve_checkpoint_source(
+            self.config.training.start_from_checkpoint
+        )
 
     @property
     def model_config(self):
@@ -78,9 +98,9 @@ class Gr00tN1d7Pipeline(ModelPipeline):
     def _create_model(self):
         """Setup model with proper vocabulary expansion."""
         skip_weight_loading = getattr(self.config.training, "skip_weight_loading", False)
-        if self.config.training.start_from_checkpoint is not None and not skip_weight_loading:
+        if self.checkpoint_source is not None and not skip_weight_loading:
             model, loading_info = AutoModel.from_pretrained(
-                self.config.training.start_from_checkpoint,
+                self.checkpoint_source,
                 tune_llm=self.config.model.tune_llm,
                 tune_visual=self.config.model.tune_visual,
                 tune_projector=self.config.model.tune_projector,
@@ -125,6 +145,14 @@ class Gr00tN1d7Pipeline(ModelPipeline):
                 transformers_loading_kwargs=self.transformers_loading_kwargs,
             )
 
+        requested_manifest = self.config.model.cka_pruning_manifest
+        if requested_manifest is not None:
+            pruning_stats = model.apply_cka_pruning(requested_manifest)
+            logging.info(
+                "Applied N1.7 CKA pruning after full checkpoint load: %s",
+                pruning_stats,
+            )
+
         logging.debug(f"Model Config: {model.config}")
         with run_or_wait_on_rank0(label="final_model_config.json write") as is_rank0:
             if is_rank0:
@@ -153,9 +181,9 @@ class Gr00tN1d7Pipeline(ModelPipeline):
         """Create appropriate dataset based on task and mode."""
         letter_box_transform = self.model_config.letter_box_transform
         logging.info("N1.7 letter_box_transform=%s", letter_box_transform)
-        if self.config.training.start_from_checkpoint is not None:
+        if self.checkpoint_source is not None:
             processor = AutoProcessor.from_pretrained(
-                self.config.training.start_from_checkpoint,
+                self.checkpoint_source,
                 # Overrides
                 modality_configs=self.config.data.modality_configs,
                 use_percentiles=self.model_config.use_percentiles,
