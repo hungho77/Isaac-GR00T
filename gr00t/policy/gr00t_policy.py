@@ -25,8 +25,8 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-import torch
 from safetensors.torch import load_file as load_safetensors
+import torch
 from transformers import AutoConfig, AutoModel, AutoProcessor
 
 from gr00t.data.embodiment_tags import FINETUNE_ONLY_TAGS, POSTTRAIN_TAGS, EmbodimentTag
@@ -34,6 +34,7 @@ from gr00t.data.interfaces import BaseProcessor
 from gr00t.data.types import MessageType, ModalityConfig, VLAStepData
 
 from .policy import BasePolicy, PolicyWrapper
+
 
 # NOTE: Gr00tN1d7 is imported lazily inside Gr00tPolicy.__init__, not here at
 # module level. gr00t.model.modules.dit requires `diffusers`, which is only

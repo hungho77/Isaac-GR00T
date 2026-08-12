@@ -9,6 +9,13 @@
 /examples/LIBERO/libero_spatial_no_noops_1.0.0_lerobot/
 /examples/LIBERO/converted
 scripts/lerobot_conversion/examples/LIBERO/converted/
+# UR10e: ignore the downloaded dataset and any train/val split carved from it,
+# but keep modality.json / ur10e_config.py, which are the checked-in configs.
+/examples/UR10e/*
+!/examples/UR10e/modality.json
+!/examples/UR10e/ur10e_config.py
+!/examples/UR10e/README.md
+
 # UV lock file
 uv.lock
 
