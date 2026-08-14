@@ -14,8 +14,216 @@
   </p>
 </div>
 
+> [!IMPORTANT]
+> You are viewing the **`ducnm` research branch**. It extends the upstream GR00T N1.7
+> runtime with native, manifest-driven CKA structural pruning, UR10e-cup dataset support,
+> offline evaluation tools, and a fail-closed real-robot inference server. Upstream GR00T
+> documentation is preserved below.
+
+## `ducnm` branch overview
+
+### Purpose
+
+This branch supports experiments that measure whether Centered Kernel Alignment (CKA) can
+identify redundant GR00T N1.7 layers, reduce model size and inference cost, and retain useful
+action prediction quality after recovery fine-tuning. The primary custom embodiment is a
+UR10e arm with a Robotiq gripper trained on
+[`khanhnd61/ur10e-cup`](https://huggingface.co/datasets/khanhnd61/ur10e-cup).
+
+The branch covers the model-side pipeline:
+
+```text
+LeRobot v3 dataset
+  -> pinned conversion and validation
+  -> activation capture
+  -> linear CKA analysis
+  -> pruning manifest
+  -> structural pruning
+  -> recovery fine-tuning
+  -> offline evaluation and heatmaps
+  -> strict checkpoint verification
+  -> policy server for robot-client inference
+```
+
+CKA is used for **layer selection**, not as an accuracy metric. Task accuracy must still be
+measured independently with held-out open-loop evaluation and, only after safety validation,
+closed-loop robot trials.
+
+### What this branch adds
+
+| Area | Branch support |
+|---|---|
+| CKA runtime | Linear CKA, adjacent-layer ranking and topology-aware keep-index selection |
+| Structural pruning | Language backbone, Action-DiT and VLA self-attention `ModuleList` pruning |
+| Checkpoint contract | Manifest persisted as `config.json["cka_pruning_manifest"]` |
+| Recovery | Full checkpoint loads first; structural pruning is applied before fine-tuning |
+| Inference | Reduced architecture is rebuilt before the pruned state dictionary is loaded |
+| Action-DiT routing | Retained blocks preserve `_gr00t_original_index` and their original attention roles |
+| Offline evaluation | Activation capture, CKA maps, latency/VRAM, MSE/MAE and prediction plots |
+| UR10e dataset | Pinned LeRobot v3 download, v3-to-v2 conversion, modality installation and validation |
+| Deployment | Strict checkpoint verifier and fail-closed CKA policy server |
+| Tests | Manifest, topology, loading-contract and retained-depth tests |
+
+### Supported notebook/model variants
+
+The manifest stores explicit original indices, so retained depths do not have to be multiples
+of four. Every retained Action-DiT set must nevertheless contain at least one text-cross,
+one image-cross and one self-attention block.
+
+| Variant | Action-DiT | Language backbone | VLA self-attention | Intended use |
+|---|---:|---:|---:|---|
+| 6/4/2 | 6 of 32 | 4 of 16 | 2 of 4 | Deep pruning with extra Action-DiT capacity |
+| 4/6/2 | 4 of 32 | 6 of 16 | 2 of 4 | Deep pruning with extra language capacity |
+| 4/4/4 | 4 of 32 | 4 of 16 | 4 of 4 | Deep pruning while retaining VLSA |
+| 4/2/1 | 4 of 32 | 2 of 16 | 1 of 4 | Extreme/P87.5-style research candidate |
+
+Other depths are accepted when their manifest passes validation. This branch intentionally
+does not use the `prune_model` / `kept_layer_idx_list_*` group-of-four schema from other
+experimental branches.
+
+The current Modal notebooks are pinned to an exact `ducnm` commit and detect the native
+runtime before considering their embedded legacy overlay. This prevents applying the same
+structural patch twice.
+
+### Manifest and checkpoint contract
+
+A native pruned checkpoint must contain a schema-v1 manifest:
+
+```json
+{
+  "schema_version": 1,
+  "model_type": "Gr00tN1d7",
+  "modules": {
+    "action_dit": {
+      "original_depth": 32,
+      "keep_indices": [0, 1, 2, 8, 17, 31]
+    },
+    "backbone_language": {
+      "original_depth": 16,
+      "keep_indices": [0, 5, 10, 15]
+    },
+    "vl_self_attention": {
+      "original_depth": 4,
+      "keep_indices": [0, 3]
+    }
+  }
+}
+```
+
+The checkpoint directory used for inference must be a merged/root export and normally includes:
+
+- `config.json` containing `cka_pruning_manifest`;
+- `model.safetensors` or sharded `model-*.safetensors` plus its index;
+- `processor/` or compatible processor files;
+- the training state/provenance files required by the experiment report.
+
+Adapter-only or intermediate LoRA checkpoints are not real-robot deployment artifacts. Merge
+them first and confirm that the resulting root checkpoint embeds the native manifest.
+
+### UR10e-cup dataset preparation
+
+The public source is LeRobot v3 and must be converted before GR00T training. The preparation
+script pins the source revision and validates episode/frame counts, camera keys, motor order,
+timestamps, action alignment, binary gripper values and the installed modality mapping.
+
+```bash
+uv run python examples/UR10eCup/prepare_dataset.py \
+  --root /path/to/dataset-cache
+```
+
+The expected state/action order is:
+
+```text
+shoulder_pan, shoulder_lift, elbow, wrist_1, wrist_2, wrist_3, gripper
+```
+
+Actions are absolute six-joint targets followed by the gripper target. Do not silently reinterpret
+them as deltas or change units in the robot client.
+
+### CKA experiment workflow
+
+1. Capture task-diverse hidden states from the unpruned source model with
+   `scripts/cka_n1d7/capture_activations.py`.
+2. Run `scripts/cka_n1d7/analyze_cka.py` to create heatmaps, scores and
+   `pruning_manifest.json`.
+3. Pass the manifest to recovery fine-tuning with
+   `--cka-pruning-manifest-path /path/to/pruning_manifest.json`.
+4. Save a merged root checkpoint and evaluate it with
+   `scripts/cka_n1d7/benchmark_finetuned.py`.
+5. Compare recovered representations using `compare_cka_heatmaps.py` and model metrics using
+   `compare_finetuned.py`.
+6. Verify the final checkpoint before it is copied to the inference machine.
+
+Keep calibration, validation and test episodes disjoint. Baseline and candidate comparisons
+must use the same samples, random seeds, denoising steps, action horizon and measurement setup.
+
+### Mandatory checkpoint gate
+
+Run the verifier on the GPU inference machine. Set the expected depths to the model variant
+being deployed:
+
+```bash
+uv run python scripts/cka_n1d7/verify_native_checkpoint.py \
+  --model-path /path/to/merged-checkpoint \
+  --expected-action-dit 6 \
+  --expected-backbone-language 4 \
+  --expected-vl-self-attention 2 \
+  --expected-action-horizon 16
+```
+
+The verifier rejects:
+
+- a missing or malformed pruning manifest;
+- the wrong retained-depth variant;
+- lost Action-DiT original-index routing;
+- unexplained missing, unexpected or mismatched tensor keys;
+- missing processor artifacts or an incompatible action horizon.
+
+### Real-robot policy server
+
+Use the branch-specific fail-closed server rather than the generic server entry point:
+
+```bash
+uv run python gr00t/eval/run_gr00t_server_cka_native_duc.py \
+  --model-path /path/to/merged-checkpoint \
+  --embodiment-tag new_embodiment \
+  --modality-config-path examples/UR10eCup/ur10e_cup_config.py \
+  --expected-action-dit 6 \
+  --expected-backbone-language 4 \
+  --expected-vl-self-attention 2 \
+  --expected-action-horizon 16 \
+  --host 0.0.0.0 \
+  --port 8791
+```
+
+The process prints a JSON preflight report before opening the ZMQ policy server. A compatible
+robot client can then connect to `<server-ip>:8791`.
+
+The repository does **not** replace the hardware-side safety controller. Before allowing motion,
+the robot client must verify joint order, radians versus degrees, absolute action semantics,
+gripper scaling, rate/position/acceleration limits, watchdog behavior, workspace constraints and
+an independent emergency stop. Start with observation-only inference, then a stationary/hold
+test, then rate-limited short-horizon motion before attempting a pickup.
+
+### Scope and limitations
+
+- This is a research branch, not an upstream NVIDIA reference benchmark.
+- The branch provides the policy/server side; the hardware-specific `robot_client.py` remains
+  on the robot control machine.
+- Legacy T4 low-VRAM and adapter-only LoRA resume behavior from older experimental branches is
+  not part of the native runtime.
+- Offline MSE/MAE and CKA similarity do not establish closed-loop success rate.
+- Passing the software verifier does not certify calibration or physical safety.
+- Full checkpoint loading, CUDA inference and robot I/O must be validated on the target GPU and
+  robot hardware before deployment.
+
+For implementation details, see
+[`docs/cka_n1d7_native.md`](docs/cka_n1d7_native.md). For upstream GR00T behavior and APIs,
+continue with the documentation below.
+
 ## Table of Contents
 
+- [`ducnm` branch overview](#ducnm-branch-overview)
 - [NVIDIA Isaac GR00T](#nvidia-isaac-gr00t)
 - [What's New in GR00T N1.7](#whats-new-in-gr00t-n17)
 - [Installation](#installation)
@@ -585,13 +793,6 @@ To add a new benchmark:
 </details>
 
 
-
-## Native CKA-pruned N1.7 checkpoints
-
-The `ducnm` branch contains manifest-based structural pruning and a fail-closed
-real-robot server for checkpoints produced by the UR10e CKA notebooks. See
-[docs/cka_n1d7_native.md](docs/cka_n1d7_native.md) for the exact recovery,
-checkpoint verification and deployment contract.
 
 ## Running Tests
 
