@@ -101,6 +101,28 @@ Cấu hình v10 áp lên dataset UR10e + Robotiq (81 episode,
 7 kênh: 6 khớp + gripper nhị phân). Config đã có sẵn: `examples/UR10e/modality.json`
 và `examples/UR10e/ur10e_config.py`.
 
+#### Checkpoint UR10e
+
+| Checkpoint | DiT | Backbone | vlsa | Params | % params | Open-loop MSE | Open-loop MAE | HF |
+|---|---|---|---|---|---|---|---|---|
+| `ur10e_v10` | 4 | 4 | 2 | 1,491,930,240 | 43.2% | 0.000940 | 0.003603 | [Yin142/ur10e_cup_v10](https://huggingface.co/Yin142/ur10e_cup_v10) |
+| `ur10e_v12` | 12 | 4 | 3 | 1,812,956,288 | 52.5% | 0.000773 | 0.003527 | [Yin142/ur10e_v12](https://huggingface.co/Yin142/ur10e_v12) |
+| `ur10e_v13` | 4 | 6 | 2 | 1,592,602,240 | 46.1% | 0.000868 | 0.003449 | [Yin142/ur10e_v13](https://huggingface.co/Yin142/ur10e_v13) |
+
+% params tính trên base NVIDIA gốc (3,455,180,928, xem bảng LIBERO Object ở trên).
+MSE/MAE đo bằng `gr00t/eval/open_loop_eval.py`, trung bình trên các trajectory
+held-out (66-80), so action dự đoán với action ground-truth trong dataset.
+
+Layer giữ lại (chỉ số 0-based, đọc từ `config.json` mỗi checkpoint):
+
+| Checkpoint | `kept_layer_idx_list_dit` | `kept_layer_idx_list_backbone` | `kept_layer_idx_list_vl_self_attn` |
+|---|---|---|---|
+| `ur10e_v10` | 0, 1, 2, 3 | 0, 1, 9, 15 | 0, 2 |
+| `ur10e_v12` | 0, 1, 2, 3, 4, 5, 6, 7, 28, 29, 30, 31 | 0, 1, 9, 15 | 0, 1, 2 |
+| `ur10e_v13` | 0, 1, 2, 3 | 0, 2, 7, 10, 14, 15 | 0, 2 |
+
+Base gốc: DiT có 32 layer, backbone có 16 layer, vlsa có 4 layer
+
 ```bash
 # 1. Tach held-out (15/81 episode) -- repo khong ho tro validation split
 uv run python scripts/split_lerobot_dataset.py \
@@ -122,7 +144,7 @@ uv run bash examples/finetune.sh \
 # 3. Eval open-loop tren dataset GOC, chi episode held-out
 uv run python gr00t/eval/open_loop_eval.py \
     --dataset-path <dataset_dir> --embodiment-tag NEW_EMBODIMENT \
-    --model-path <output_dir>/checkpoint-10000 \
+    --model-path <output_dir> \
     --traj-ids 66 67 68 69 70 71 72 73 74 75 76 77 78 79 80 \
     --execution-horizon 16 --steps 400 --save-plot-path <plot_dir>
 ```
