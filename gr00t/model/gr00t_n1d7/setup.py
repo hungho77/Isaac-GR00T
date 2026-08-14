@@ -125,6 +125,11 @@ class Gr00tN1d7Pipeline(ModelPipeline):
                 transformers_loading_kwargs=self.transformers_loading_kwargs,
             )
 
+        requested_manifest = self.config.model.cka_pruning_manifest
+        if requested_manifest is not None:
+            pruning_stats = model.apply_cka_pruning(requested_manifest)
+            logging.info("Applied N1.7 CKA pruning after full checkpoint load: %s", pruning_stats)
+
         logging.debug(f"Model Config: {model.config}")
         with run_or_wait_on_rank0(label="final_model_config.json write") as is_rank0:
             if is_rank0:

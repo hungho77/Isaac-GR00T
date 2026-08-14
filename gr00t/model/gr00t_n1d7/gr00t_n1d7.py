@@ -542,6 +542,11 @@ class Gr00tN1d7(PreTrainedModel):
 
         # Initialize action head
         self.action_head = Gr00tN1d7ActionHead(config)
+
+        # Rebuild a saved reduced architecture before state-dict loading.
+        if config.cka_pruning_manifest is not None:
+            self.apply_cka_pruning(config.cka_pruning_manifest)
+
         from .processing_gr00t_n1d7 import Gr00tN1d7DataCollator
 
         self.collator = Gr00tN1d7DataCollator(
@@ -549,6 +554,12 @@ class Gr00tN1d7(PreTrainedModel):
             model_type=config.backbone_model_type,
             transformers_loading_kwargs=transformers_loading_kwargs,
         )
+
+    def apply_cka_pruning(self, manifest: dict[str, Any]) -> dict[str, Any]:
+        """Structurally prune N1.7 according to a validated CKA manifest."""
+        from gr00t.model.cka_pruning import apply_pruning_manifest
+
+        return apply_pruning_manifest(self, manifest)
 
     def prepare_input(self, inputs: dict) -> Tuple[BatchFeature, BatchFeature]:
         """Prepare inputs for backbone and action head."""

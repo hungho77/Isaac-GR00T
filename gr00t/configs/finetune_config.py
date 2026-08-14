@@ -45,6 +45,9 @@ class FinetuneConfig:
     If None, use the pre-registered modality config in `gr00t/configs/data/embodiment_configs.py`. 
     """
 
+    cka_pruning_manifest_path: str | None = None
+    """Optional CKA manifest. Full weights load before structural pruning."""
+
     # --- Model Tuning Flags ---
     tune_llm: bool = False
     """If True, fine-tune the language model (LLM) backbone during training."""

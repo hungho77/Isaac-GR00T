@@ -308,7 +308,8 @@ class DiT(ModelMixin, ConfigMixin):
 
         # Process through transformer blocks
         for idx, block in enumerate(self.transformer_blocks):
-            if idx % 2 == 1 and self.config.interleave_self_attention:
+            topology_idx = getattr(block, "_gr00t_original_index", idx)
+            if topology_idx % 2 == 1 and self.config.interleave_self_attention:
                 hidden_states = block(
                     hidden_states,
                     attention_mask=None,
@@ -377,7 +378,8 @@ class AlternateVLDiT(DiT):
 
         # Process through transformer blocks
         for idx, block in enumerate(self.transformer_blocks):
-            if idx % 2 == 1:
+            topology_idx = getattr(block, "_gr00t_original_index", idx)
+            if topology_idx % 2 == 1:
                 # Self-attention blocks
                 hidden_states = block(
                     hidden_states,
@@ -388,7 +390,7 @@ class AlternateVLDiT(DiT):
                 )
             else:
                 # Cross-attention blocks - alternate between non-image and image tokens
-                if idx % (2 * self.attend_text_every_n_blocks) == 0:
+                if topology_idx % (2 * self.attend_text_every_n_blocks) == 0:
                     # Attend to non-image tokens
                     curr_encoder_attention_mask = non_image_attention_mask
                 else:

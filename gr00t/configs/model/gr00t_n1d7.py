@@ -114,6 +114,9 @@ class Gr00tN1d7Config(PretrainedConfig):
     tune_diffusion_model: bool = True
     tune_vlln: bool = True
 
+    # Persisted structural-pruning contract for reduced checkpoints.
+    cka_pruning_manifest: dict | None = None
+
     # State augmentation parameters
     state_dropout_prob: float = 0.8  # State dropout probability
     exclude_state: bool = False  # Zero out all state inputs (ablation)

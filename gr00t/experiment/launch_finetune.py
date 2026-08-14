@@ -79,6 +79,15 @@ if __name__ == "__main__":
     config.model.tune_visual = ft_config.tune_visual
     config.model.tune_projector = ft_config.tune_projector
     config.model.tune_diffusion_model = ft_config.tune_diffusion_model
+    if ft_config.cka_pruning_manifest_path is not None:
+        manifest_path = Path(ft_config.cka_pruning_manifest_path)
+        if not manifest_path.is_file():
+            raise FileNotFoundError(f"CKA pruning manifest does not exist: {manifest_path}")
+        from gr00t.model.cka_pruning import load_pruning_manifest
+
+        config.model.cka_pruning_manifest = load_pruning_manifest(manifest_path)
+    else:
+        config.model.cka_pruning_manifest = None
     config.model.state_dropout_prob = ft_config.state_dropout_prob
     config.model.random_rotation_angle = ft_config.random_rotation_angle
     config.model.color_jitter_params = ft_config.color_jitter_params

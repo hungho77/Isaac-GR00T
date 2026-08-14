@@ -586,6 +586,13 @@ To add a new benchmark:
 
 
 
+## Native CKA-pruned N1.7 checkpoints
+
+The `ducnm` branch contains manifest-based structural pruning and a fail-closed
+real-robot server for checkpoints produced by the UR10e CKA notebooks. See
+[docs/cka_n1d7_native.md](docs/cka_n1d7_native.md) for the exact recovery,
+checkpoint verification and deployment contract.
+
 ## Running Tests
 
 Install the development dependencies before running the test suite:

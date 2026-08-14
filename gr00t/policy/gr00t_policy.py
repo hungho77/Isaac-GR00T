@@ -25,7 +25,7 @@ from typing import Any
 
 import numpy as np
 import torch
-from transformers import AutoModel, AutoProcessor
+from transformers import AutoConfig, AutoModel, AutoProcessor
 
 from gr00t.data.embodiment_tags import FINETUNE_ONLY_TAGS, POSTTRAIN_TAGS, EmbodimentTag
 from gr00t.data.interfaces import BaseProcessor
@@ -105,8 +105,28 @@ class Gr00tPolicy(BasePolicy):
             embodiment_tag = EmbodimentTag.resolve(embodiment_tag)
         model_dir = Path(model_path)
 
-        # Load the pretrained model and move to target device with bfloat16 precision
-        model = AutoModel.from_pretrained(model_dir)
+        # A native CKA checkpoint stores its structural manifest in config.json.
+        # Build the reduced architecture in Gr00tN1d7.__init__, then reject any
+        # partial state-dict load. Plain upstream checkpoints retain their
+        # historical loading path unchanged.
+        checkpoint_config = AutoConfig.from_pretrained(model_dir)
+        pruning_manifest = getattr(checkpoint_config, "cka_pruning_manifest", None)
+        self.cka_loading_report: dict[str, Any] | None = None
+        if pruning_manifest is not None:
+            from gr00t.model.cka_pruning import (
+                validate_checkpoint_loading_info,
+                verify_model_matches_manifest,
+            )
+
+            model, loading_info = AutoModel.from_pretrained(model_dir, output_loading_info=True)
+            loading_report = validate_checkpoint_loading_info(loading_info)
+            model_report = verify_model_matches_manifest(model, pruning_manifest)
+            self.cka_loading_report = {
+                "checkpoint_loading": loading_report,
+                "model_contract": model_report,
+            }
+        else:
+            model = AutoModel.from_pretrained(model_dir)
         model.eval()  # Set model to evaluation mode
         model.to(device=device, dtype=torch.bfloat16)
         self.model = model
