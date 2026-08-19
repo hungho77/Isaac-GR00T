@@ -175,7 +175,7 @@ Việc giữ thêm hai lớp Action-DiT, hai lớp language backbone và một l
 
 ---
 
-## 6. So sánh bốn checkpoint
+## 6. So sánh 4 checkpoint
 
 Mức cắt tổng dưới đây được tính trên 52 lớp, gồm 32 Action-DiT, 16 language backbone và 4 VLSA. Đây là tỷ lệ số lớp, không phải tỷ lệ tham số hoặc FLOPs. Chỉ checkpoint 3 và 4 có rollout robot thật hợp lệ; checkpoint 1 và 2 không được diễn giải là 0% success rate.
 
