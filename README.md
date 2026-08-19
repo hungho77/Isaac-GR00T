@@ -1,4 +1,4 @@
-# BÁO CÁO TRIỂN KHAI VÀ ĐÁNH GIÁ BỐN CHECKPOINT GR00T N1.7 TRÊN UR10e
+# BÁO CÁO TRIỂN KHAI VÀ ĐÁNH GIÁ 4 CHECKPOINT GR00T N1.7 TRÊN UR10e
 
 **Nhiệm vụ:** UR10e + Robotiq Gripper - Pick up the cup  
 **Người thực hiện:** Nguyễn Minh Đức  
