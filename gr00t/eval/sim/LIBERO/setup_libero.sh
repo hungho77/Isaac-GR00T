@@ -4,6 +4,13 @@ set -euxo pipefail
 # Get the directory where this script is located
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
+# Notebook kernels commonly export the inline Matplotlib backend.  That backend
+# is unavailable in LIBERO's isolated environment, and simulation is headless
+# anyway, so make the setup/smoke test use non-interactive rendering explicitly.
+export MPLBACKEND=Agg
+export MUJOCO_GL="${MUJOCO_GL:-egl}"
+export PYOPENGL_PLATFORM="${PYOPENGL_PLATFORM:-egl}"
+
 # Set paths relative to script location
 LIBERO_REPO="$SCRIPT_DIR/../../../../external_dependencies/LIBERO"
 PROJECT_REPO="$SCRIPT_DIR/../../../.."
