@@ -87,6 +87,7 @@ EXPECTED_TASKS = 10
 EXPECTED_LLM_LINEARS = 112
 EXPECTED_DIT_LINEARS = 192
 EXPECTED_TOTAL_LINEARS = 304
+FULL_ROLLOUT_EPISODES_PER_TASK = 20
 
 
 @dataclass(frozen=True)
@@ -251,6 +252,7 @@ def _require_manifest(cfg: Config) -> dict[str, Any]:
         "n_action_steps": cfg.n_action_steps,
         "max_episode_steps": cfg.max_episode_steps,
         "calibration_topk": cfg.calibration_topk,
+        "evaluation_trials_per_task": FULL_ROLLOUT_EPISODES_PER_TASK,
     }
     mismatches = {
         key: {"manifest": manifest.get(key), "current": value}
@@ -309,6 +311,13 @@ def phase_prepare(cfg: Config) -> None:
     quant_config = (
         cfg.repo_path / "examples" / "LIBERO" / "quantization" / "configs" / f"{cfg.suite}.json"
     )
+    quant_config_payload = _load_json(quant_config)
+    configured_trials = quant_config_payload.get("evaluation_trials_per_task")
+    if configured_trials != FULL_ROLLOUT_EPISODES_PER_TASK:
+        raise RuntimeError(
+            f"{quant_config} sets evaluation_trials_per_task={configured_trials!r}; "
+            f"expected protocol value {FULL_ROLLOUT_EPISODES_PER_TASK}"
+        )
     config_copy = cfg.suite_root / "configs" / quant_config.name
     config_copy.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(quant_config, config_copy)
@@ -334,6 +343,7 @@ def phase_prepare(cfg: Config) -> None:
         "n_action_steps": cfg.n_action_steps,
         "max_episode_steps": cfg.max_episode_steps,
         "calibration_topk": cfg.calibration_topk,
+        "evaluation_trials_per_task": FULL_ROLLOUT_EPISODES_PER_TASK,
         "tasks": list(SUITE_TASKS[cfg.suite]),
         "gpu": gpu_info,
         "prepared_at_utc": _utc_now(),
@@ -723,7 +733,7 @@ def _run_rollout_phase(cfg: Config, *, smoke: bool) -> None:
             if not smoke_path.is_file():
                 raise RuntimeError("Missing smoke result. Run WORK_PHASE='smoke_rollout'.")
         task_indices = tuple(range(EXPECTED_TASKS))
-        n_episodes = 10
+        n_episodes = FULL_ROLLOUT_EPISODES_PER_TASK
         phase_name = "full_rollout"
         result_root = cfg.suite_root / "results"
         video_root = cfg.suite_root / "videos" / "full"
@@ -769,7 +779,7 @@ def _collect_mode_results(cfg: Config, mode: str) -> list[dict[str, Any]]:
             manifest=manifest,
             mode=mode,
             task_index=task_index,
-            n_episodes=10,
+            n_episodes=FULL_ROLLOUT_EPISODES_PER_TASK,
             n_envs=cfg.n_envs,
             seed=seed,
         ):
@@ -960,8 +970,11 @@ def _parse_args() -> Config:
         parser.error(f"--smoke-task-index must be in [0, {EXPECTED_TASKS - 1}]")
     if args.n_envs <= 0:
         parser.error("--n-envs must be positive")
-    if 10 % args.n_envs != 0:
-        parser.error("--n-envs must divide the ten final-evaluation episodes per task")
+    if FULL_ROLLOUT_EPISODES_PER_TASK % args.n_envs != 0:
+        parser.error(
+            "--n-envs must divide the "
+            f"{FULL_ROLLOUT_EPISODES_PER_TASK} final-evaluation episodes per task"
+        )
     return Config(**vars(args))
 
 

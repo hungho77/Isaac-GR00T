@@ -35,11 +35,11 @@ setup -> prepare -> calibrate -> build_pack -> smoke_rollout -> full_rollout -> 
 
 The notebook clones only `duc-quan`, resolves the selected Hugging Face
 checkpoint reference to an immutable commit SHA, evaluates BF16 and W4A4 with
-paired seeds, and atomically stores one ten-episode JSON shard per task. The
-`package` phase validates all 200 final-evaluation episodes for the selected
-suite, writes an inventory plus SHA256 checksums, and creates a suite-specific
-ZIP suitable for upload as a Kaggle Dataset. Run `status` at any time for a
-read-only progress report.
+paired seeds, and atomically stores one 20-episode JSON shard per task. The
+`package` phase validates all 400 final-evaluation episodes for the selected
+suite (10 tasks x 20 episodes x 2 modes), writes an inventory plus SHA256
+checksums, and creates a suite-specific ZIP suitable for upload as a Kaggle
+Dataset. Run `status` at any time for a read-only progress report.
 
 ## 1. Collect one FP16 calibration artifact per suite
 
