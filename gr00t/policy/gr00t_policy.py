@@ -87,6 +87,11 @@ class Gr00tPolicy(BasePolicy):
         *,
         device: int | str,
         strict: bool = True,
+        holoq_pack_path: str | None = None,
+        holoq_calibration_output: str | None = None,
+        holoq_suite: str | None = None,
+        holoq_calibration_run_id: str | None = None,
+        holoq_calibration_topk: int = 512,
     ):
         """Initialize the Gr00t Policy.
 
@@ -96,6 +101,12 @@ class Gr00tPolicy(BasePolicy):
             model_path: Path to the pretrained model checkpoint directory
             device: Device to run the model on (e.g., 'cuda:0', 0, 'cpu')
             strict: Whether to enforce strict input validation (default: True)
+            holoq_pack_path: Optional strict suite-specific W4A4 pack.
+            holoq_calibration_output: Optional path for calibration statistics.
+                This is mutually exclusive with ``holoq_pack_path``.
+            holoq_suite: LIBERO suite associated with calibration/pack use.
+            holoq_calibration_run_id: Identifier for the exact rollout set.
+            holoq_calibration_topk: Streaming q99.9 order-statistic capacity.
         """
         # Import this to register all models.
         import gr00t.model  # noqa: F401
@@ -108,8 +119,35 @@ class Gr00tPolicy(BasePolicy):
         # Load the pretrained model and move to target device with bfloat16 precision
         model = AutoModel.from_pretrained(model_dir)
         model.eval()  # Set model to evaluation mode
+        if holoq_pack_path is not None and holoq_calibration_output is not None:
+            raise ValueError("Cannot load a HoloQ pack while collecting HoloQ calibration")
+        if holoq_pack_path is not None:
+            if holoq_suite is None:
+                raise ValueError("holoq_suite is required when loading a HoloQ pack")
+            from gr00t.quantization.runtime import apply_holoq_pack
+
+            summary = apply_holoq_pack(model, holoq_pack_path, expected_suite=holoq_suite)
+            print(
+                "Applied strict HoloQ W4A4 pack "
+                f"({summary.llm_linears} LLM + {summary.dit_linears} DiT linears)"
+            )
         model.to(device=device, dtype=torch.bfloat16)
         self.model = model
+        self._holoq_calibration_output = holoq_calibration_output
+        self._holoq_calibrator = None
+        if holoq_calibration_output is not None:
+            if holoq_suite is None or holoq_calibration_run_id is None:
+                raise ValueError(
+                    "holoq_suite and holoq_calibration_run_id are required for calibration"
+                )
+            from gr00t.quantization.calibration import HoloQCalibrationCollector
+
+            self._holoq_calibrator = HoloQCalibrationCollector(
+                model,
+                suite=holoq_suite,
+                run_id=holoq_calibration_run_id,
+                topk=holoq_calibration_topk,
+            )
 
         # Load the processor for input/output transformation.
         # Training saves processor files under a "processor/" subdirectory, but
@@ -173,6 +211,15 @@ class Gr00tPolicy(BasePolicy):
         assert len(language_keys) >= 1, "At least one language key is required"
         assert len(language_delta_indices) == 1, "Only one language delta index is supported"
         self.language_key = language_keys[0]
+
+    def finalize_holoq_calibration(self) -> Path | None:
+        """Persist collected HoloQ statistics, if calibration was enabled."""
+
+        if self._holoq_calibrator is None:
+            return None
+        output = self._holoq_calibrator.finalize(self._holoq_calibration_output)
+        self._holoq_calibrator = None
+        return output
 
     def _unbatch_observation(self, value: dict[str, Any]) -> list[dict[str, Any]]:
         """Unbatch a batched observation into a list of single observations.

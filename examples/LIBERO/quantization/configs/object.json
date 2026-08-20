@@ -1,0 +1,13 @@
+{
+  "suite": "object",
+  "checkpoint_subdir": "libero_object",
+  "dataset": "IPEC-COMMUNITY/libero_object_no_noops_1.0.0_lerobot",
+  "denoising_steps": 4,
+  "expected_llm_layers": 16,
+  "expected_dit_layers": 32,
+  "expected_quantized_linears": 304,
+  "calibration_trajectories": 10,
+  "calibration_trajectory_policy": "one_fp16_rollout_per_task_fixed_initial_state",
+  "evaluation_trials_per_task": 10,
+  "evaluation_initial_states": "held_out_from_calibration"
+}

@@ -2,6 +2,9 @@
 
 Benchmark for studying knowledge transfer in lifelong robot learning. Includes multiple suites: **Spatial** (spatial reasoning), **Object** (object generalization), **Goal** (goal-conditioned learning), and **10 Long** (long-horizon multi-step tasks). Provides RGB images, proprioception data, and language task specifications.
 
+For the strict GR00T-N1.7 HoloQ-style W4A4 calibration, pack-building, and
+four-suite evaluation workflow, see [quantization/README.md](quantization/README.md).
+
 For more information, see the [official website](https://libero-project.github.io/main.html).
 
 ---

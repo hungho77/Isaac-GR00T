@@ -87,6 +87,21 @@ class ServerConfig:
     use_sim_policy_wrapper: bool = False
     """Whether to use the sim policy wrapper"""
 
+    holoq_pack_path: str | None = None
+    """Strict suite-specific HoloQ W4A4 pack to apply at model load"""
+
+    holoq_calibration_output: str | None = None
+    """Write HoloQ calibration statistics here when the server exits"""
+
+    holoq_suite: str | None = None
+    """Calibration/evaluation suite: object, spatial, goal, or long"""
+
+    holoq_calibration_run_id: str | None = None
+    """Identifier for the exact ten-trajectory calibration rollout set"""
+
+    holoq_calibration_topk: int = 512
+    """Per-channel order-statistic capacity used to estimate q99.9"""
+
 
 def main(config: ServerConfig):
     config.embodiment_tag = EmbodimentTag.resolve(config.embodiment_tag)
@@ -96,8 +111,11 @@ def main(config: ServerConfig):
     print(f"  Device: {config.device}")
     print(f"  Host: {config.host}")
     print(f"  Port: {config.port}")
+    print(f"  HoloQ pack: {config.holoq_pack_path}")
+    print(f"  HoloQ calibration output: {config.holoq_calibration_output}")
 
     # Create and start the server
+    calibration_policy: Gr00tPolicy | None = None
     if config.model_path is not None:
         # check if the model path exists
         if config.model_path.startswith("/") and not os.path.exists(config.model_path):
@@ -107,8 +125,18 @@ def main(config: ServerConfig):
             model_path=config.model_path,
             device=config.device,
             strict=config.strict,
+            holoq_pack_path=config.holoq_pack_path,
+            holoq_calibration_output=config.holoq_calibration_output,
+            holoq_suite=config.holoq_suite,
+            holoq_calibration_run_id=config.holoq_calibration_run_id,
+            holoq_calibration_topk=config.holoq_calibration_topk,
         )
+        calibration_policy = policy
     elif config.dataset_path is not None:
+        if config.holoq_pack_path is not None or config.holoq_calibration_output is not None:
+            raise ValueError(
+                "HoloQ options require --model-path and cannot be used with ReplayPolicy"
+            )
         if config.execution_horizon is None:
             raise ValueError(
                 "--execution-horizon is required when --dataset-path is set "
@@ -173,6 +201,11 @@ def main(config: ServerConfig):
             server.run()
         except KeyboardInterrupt:
             print("\nShutting down server...")
+        finally:
+            if calibration_policy is not None:
+                output = calibration_policy.finalize_holoq_calibration()
+                if output is not None:
+                    print(f"Wrote HoloQ calibration artifact: {output}")
 
 
 if __name__ == "__main__":
