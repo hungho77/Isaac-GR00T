@@ -23,6 +23,24 @@ uniform W4A4 method to the four published GR00T-N1.7 LIBERO checkpoints.
 
 The JSON files under `configs/` make these suite-specific assumptions explicit.
 
+## Modal L4 phase-one notebook
+
+[`modal_phase1.ipynb`](modal_phase1.ipynb) is the resumable hosted-Modal workflow.
+Attach a Modal Volume at `/vol`, select an NVIDIA L4 kernel, set `SUITE`, and run
+the phases in order by changing only `WORK_PHASE` and choosing **Run all**:
+
+```text
+setup -> prepare -> calibrate -> build_pack -> smoke_rollout -> full_rollout -> package
+```
+
+The notebook clones only `duc-quan`, resolves the selected Hugging Face
+checkpoint reference to an immutable commit SHA, evaluates BF16 and W4A4 with
+paired seeds, and atomically stores one ten-episode JSON shard per task. The
+`package` phase validates all 200 final-evaluation episodes for the selected
+suite, writes an inventory plus SHA256 checksums, and creates a suite-specific
+ZIP suitable for upload as a Kaggle Dataset. Run `status` at any time for a
+read-only progress report.
+
 ## 1. Collect one FP16 calibration artifact per suite
 
 Start the normal server without a quantization pack. Example for Object:
