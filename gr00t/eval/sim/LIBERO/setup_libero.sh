@@ -62,12 +62,49 @@ uv pip install transformers==4.57.3 msgpack==1.1.0 msgpack-numpy==0.4.8 gymnasiu
 # the RoboCasa island's existing mujoco==3.3.1 pin).
 uv pip install numpy==1.26.4 mujoco==3.3.1
 
+# LIBERO pins robosuite 1.4.0. Configure its default private macros without
+# importing the package (the upstream setup helper warns before copying), and
+# make the ASCII logo a raw string so Python 3.12 does not emit SyntaxWarning.
+ROBOSUITE_PACKAGE_DIR="$(python - <<'PY'
+import importlib.util
+from pathlib import Path
+
+spec = importlib.util.find_spec("robosuite")
+if spec is None or not spec.submodule_search_locations:
+    raise RuntimeError("Installed robosuite package was not found")
+print(Path(next(iter(spec.submodule_search_locations))).resolve())
+PY
+)"
+python "$SCRIPT_DIR/configure_robosuite.py" "$ROBOSUITE_PACKAGE_DIR"
+
 # Expose gr00t from the repo root via a .pth: no dependency re-resolution, and
 # the island supplies gr00t's runtime deps itself (matches the old --no-deps).
 python -c "import sysconfig, pathlib; pathlib.Path(sysconfig.get_path('purelib'), 'gr00t.pth').write_text(pathlib.Path('$PROJECT_REPO').resolve().as_posix() + '\n')"
 
-rm -rf $HOME/.libero
-printf 'n\n' | python -c "from gr00t.eval.sim.LIBERO.libero_env import register_libero_envs"
+# LIBERO's import-time initializer normally prompts for a custom dataset path.
+# Cloud notebooks have no interactive stdin, so write the canonical submodule
+# paths before the first LIBERO import and never enter that prompt path.
+python - <<PY
+from pathlib import Path
+
+benchmark_root = (Path("$LIBERO_REPO") / "libero" / "libero").resolve()
+config_dir = Path.home() / ".libero"
+config_dir.mkdir(parents=True, exist_ok=True)
+config_path = config_dir / "config.yaml"
+values = {
+    "benchmark_root": benchmark_root,
+    "bddl_files": benchmark_root / "bddl_files",
+    "init_states": benchmark_root / "init_files",
+    "datasets": benchmark_root.parent / "datasets",
+    "assets": benchmark_root / "assets",
+}
+config_path.write_text(
+    "".join(f"{key}: {Path(value).as_posix()}\n" for key, value in values.items()),
+    encoding="utf-8",
+)
+print(f"Wrote non-interactive LIBERO config: {config_path}")
+PY
+python -c "from gr00t.eval.sim.LIBERO.libero_env import register_libero_envs; register_libero_envs()"
 python - <<'PY'
 import os
 os.environ.setdefault("MUJOCO_GL", "egl")

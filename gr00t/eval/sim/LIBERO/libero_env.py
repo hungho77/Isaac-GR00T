@@ -23,6 +23,7 @@ using our distributed evaluation.
 
 import math
 import os
+import string
 
 import gymnasium as gym
 from gymnasium import spaces
@@ -51,6 +52,10 @@ def quat2axisangle(quat):
     Returns:
         np.array: (ax,ay,az) axis-angle exponential coordinates
     """
+    # Work on a private float64 copy: clipping a simulator-owned observation in
+    # place would mutate the raw robosuite result.
+    quat = np.asarray(quat, dtype=np.float64).copy()
+
     # clip quaternion
     if quat[3] > 1.0:
         quat[3] = 1.0
@@ -60,7 +65,7 @@ def quat2axisangle(quat):
     den = np.sqrt(1.0 - quat[3] * quat[3])
     if math.isclose(den, 0.0):
         # This is (close to) a zero degree rotation, immediately return
-        return np.zeros(3)
+        return np.zeros(3, dtype=np.float64)
 
     return (quat[:3] * 2.0 * math.acos(quat[3])) / den
 
@@ -115,25 +120,33 @@ class LiberoEnv(gym.Env):
                 "video.wrist_image": gym.spaces.Box(
                     low=0, high=255, shape=(256, 256, 3), dtype=np.uint8
                 ),
-                "state.x": gym.spaces.Box(low=-1, high=1, shape=(1,)),
-                "state.y": gym.spaces.Box(low=-1, high=1, shape=(1,)),
-                "state.z": gym.spaces.Box(low=-1, high=1, shape=(1,)),
-                "state.roll": gym.spaces.Box(low=-1, high=1, shape=(1,)),
-                "state.pitch": gym.spaces.Box(low=-1, high=1, shape=(1,)),
-                "state.yaw": gym.spaces.Box(low=-1, high=1, shape=(1,)),
-                "state.gripper": gym.spaces.Box(low=-1, high=1, shape=(2,)),
-                "annotation.human.action.task_description": gym.spaces.Text(max_length=512),
+                # End-effector positions and gripper joint positions are raw
+                # physical values, not normalized coordinates.
+                "state.x": gym.spaces.Box(-np.inf, np.inf, shape=(1,), dtype=np.float32),
+                "state.y": gym.spaces.Box(-np.inf, np.inf, shape=(1,), dtype=np.float32),
+                "state.z": gym.spaces.Box(-np.inf, np.inf, shape=(1,), dtype=np.float32),
+                # quat2axisangle preserves robosuite's quaternion sign, so its
+                # angle can span [0, 2*pi] rather than only the canonical pi.
+                "state.roll": gym.spaces.Box(-2 * np.pi, 2 * np.pi, shape=(1,), dtype=np.float32),
+                "state.pitch": gym.spaces.Box(-2 * np.pi, 2 * np.pi, shape=(1,), dtype=np.float32),
+                "state.yaw": gym.spaces.Box(-2 * np.pi, 2 * np.pi, shape=(1,), dtype=np.float32),
+                "state.gripper": gym.spaces.Box(-np.inf, np.inf, shape=(2,), dtype=np.float32),
+                # Gymnasium's default Text charset excludes spaces and
+                # punctuation, both of which occur in LIBERO instructions.
+                "annotation.human.action.task_description": gym.spaces.Text(
+                    max_length=512, charset=string.printable
+                ),
             }
         )
         self.action_space = spaces.Dict(
             {
-                "action.x": spaces.Box(low=-1, high=1, shape=(1,)),
-                "action.y": spaces.Box(low=-1, high=1, shape=(1,)),
-                "action.z": spaces.Box(low=-1, high=1, shape=(1,)),
-                "action.roll": spaces.Box(low=-1, high=1, shape=(1,)),
-                "action.pitch": spaces.Box(low=-1, high=1, shape=(1,)),
-                "action.yaw": spaces.Box(low=-1, high=1, shape=(1,)),
-                "action.gripper": spaces.Box(low=-1, high=1, shape=(1,)),
+                "action.x": spaces.Box(low=-1, high=1, shape=(1,), dtype=np.float32),
+                "action.y": spaces.Box(low=-1, high=1, shape=(1,), dtype=np.float32),
+                "action.z": spaces.Box(low=-1, high=1, shape=(1,), dtype=np.float32),
+                "action.roll": spaces.Box(low=-1, high=1, shape=(1,), dtype=np.float32),
+                "action.pitch": spaces.Box(low=-1, high=1, shape=(1,), dtype=np.float32),
+                "action.yaw": spaces.Box(low=-1, high=1, shape=(1,), dtype=np.float32),
+                "action.gripper": spaces.Box(low=-1, high=1, shape=(1,), dtype=np.float32),
             }
         )
 
@@ -141,24 +154,27 @@ class LiberoEnv(gym.Env):
         self._env.close()
 
     def _process_observation(self, obs):
-        xyz = obs["robot0_eef_pos"]
+        xyz = np.asarray(obs["robot0_eef_pos"], dtype=np.float32)
         rpy = quat2axisangle(obs["robot0_eef_quat"])
-        gripper = obs["robot0_gripper_qpos"]
+        gripper = np.asarray(obs["robot0_gripper_qpos"], dtype=np.float32)
         new_obs = {
-            "video.image": obs["agentview_image"][::-1, ::-1],
-            "video.wrist_image": obs["robot0_eye_in_hand_image"][::-1, ::-1],
-            "state.x": [xyz[0]],
-            "state.y": [xyz[1]],
-            "state.z": [xyz[2]],
-            "state.roll": [rpy[0]],
-            "state.pitch": [rpy[1]],
-            "state.yaw": [rpy[2]],
+            "video.image": np.ascontiguousarray(obs["agentview_image"][::-1, ::-1], dtype=np.uint8),
+            "video.wrist_image": np.ascontiguousarray(
+                obs["robot0_eye_in_hand_image"][::-1, ::-1], dtype=np.uint8
+            ),
+            "state.x": np.asarray([xyz[0]], dtype=np.float32),
+            "state.y": np.asarray([xyz[1]], dtype=np.float32),
+            "state.z": np.asarray([xyz[2]], dtype=np.float32),
+            "state.roll": np.asarray([rpy[0]], dtype=np.float32),
+            "state.pitch": np.asarray([rpy[1]], dtype=np.float32),
+            "state.yaw": np.asarray([rpy[2]], dtype=np.float32),
             "state.gripper": gripper,
             "annotation.human.action.task_description": self._task_description,
         }
         return new_obs
 
     def reset(self, seed=None, options=None):
+        super().reset(seed=seed)
         if seed is not None:
             # OffScreenRenderEnv follows the robosuite API: .seed(int), not reset(seed=...).
             self._env.seed(int(seed))
