@@ -2,8 +2,6 @@
 
 **Ngày tổng hợp:** 22/08/2026  
 **Phạm vi:** LIBERO simulation — `object`, `spatial`, `goal`, `long`  
-**Nguồn kết quả:** bốn ZIP Phase 2 đã qua CRC và SHA-256 nội bộ  
-**Trạng thái:** báo cáo kết quả fake-quant W4A4; chưa phải native INT4 deployment
 
 ## 1. Bối cảnh chung và mục tiêu
 
