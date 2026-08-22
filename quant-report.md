@@ -1,4 +1,4 @@
-# Báo cáo đánh giá HoloQ W4A4 trên GR00T N1.7 với LIBERO
+# Đánh giá HoloQ W4A4 trên GR00T N1.7 với LIBERO
 
 **Ngày tổng hợp:** 22/08/2026  
 **Phạm vi:** LIBERO simulation — `object`, `spatial`, `goal`, `long`  
