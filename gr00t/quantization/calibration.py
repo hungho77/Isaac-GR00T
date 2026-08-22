@@ -20,14 +20,14 @@ from .packing import (
     stable_layer_seed,
 )
 from .runtime import model_config_sha256
-from .scope import QuantTarget, discover_n1d7_targets, validate_n1d7_scope
+from .scope import QuantTarget, discover_n1d7_targets, normalize_scopes, validate_n1d7_scope
 
 
-CALIBRATION_FORMAT_VERSION = 1
+CALIBRATION_FORMAT_VERSION = 2
 
 
 class HoloQCalibrationCollector:
-    """Collect block Hessians for LLM GPTQ and q99.9 tables for DiT RTN.
+    """Collect block Hessians for LLM/ViT GPTQ and q99.9 tables for DiT RTN.
 
     DiT percentiles use a streaming per-channel top-k order statistic. This is
     exact while the q99.9 rank-from-the-top is no larger than ``topk``; finalizing
@@ -45,6 +45,9 @@ class HoloQCalibrationCollector:
         percentile: float = 99.9,
         topk: int = 512,
         seed: int = 0,
+        scopes: str | tuple[str, ...] | list[str] | None = None,
+        include_vit_mergers: bool = True,
+        include_vit_patch_embed: bool = False,
     ) -> None:
         if suite not in {"object", "spatial", "goal", "long"}:
             raise ValueError(f"Unsupported LIBERO suite {suite!r}")
@@ -63,34 +66,48 @@ class HoloQCalibrationCollector:
         self.percentile = percentile
         self.topk = topk
         self.seed = seed
+        self.scopes = normalize_scopes(scopes)
+        self.include_vit_mergers = include_vit_mergers
+        self.include_vit_patch_embed = include_vit_patch_embed
         self.num_steps = int(model.action_head.num_inference_timesteps)
-        self.targets = discover_n1d7_targets(model)
-        # Published N1.7 LIBERO checkpoints use select_layer=16 and 32 DiT
-        # blocks: 16*7 + 32*6 = 304 covered linears.
-        self.summary = validate_n1d7_scope(
-            self.targets, expected_llm_layers=16, expected_dit_layers=32
+        self.targets = discover_n1d7_targets(
+            model,
+            scopes=self.scopes,
+            include_vit_mergers=include_vit_mergers,
+            include_vit_patch_embed=include_vit_patch_embed,
         )
-        self._transforms: dict[str, tuple[torch.Tensor, torch.Tensor]] = {}
+        self.summary = validate_n1d7_scope(
+            self.targets,
+            expected_llm_layers=16 if "llm" in self.scopes else None,
+            expected_dit_layers=32 if "dit" in self.scopes else None,
+            scopes=self.scopes,
+        )
+        self._transforms: dict[str, tuple[torch.Tensor, torch.Tensor] | None] = {}
         self._llm_hessian: dict[str, torch.Tensor] = {}
         self._llm_rows: dict[str, int] = {}
         self._dit_topk: dict[str, list[torch.Tensor | None]] = {}
         self._dit_rows: dict[str, list[int]] = {}
+        self._identity_rows: dict[str, int] = {}
         self._handles: list[Any] = []
         self._closed = False
 
         for target in self.targets:
-            layer_seed = stable_layer_seed(seed, target.name)
-            permutation, rotations, _ = build_svd_hadamard_transform(
-                target.module.weight,
-                block_size=rotation_block_size,
-                seed=layer_seed,
-            )
-            # Calibration is already GPU-heavy; retaining these compact block
-            # transforms avoids copying them from CPU before every hooked linear.
-            self._transforms[target.name] = (
-                permutation.to(target.module.weight.device),
-                rotations.to(target.module.weight.device, dtype=torch.float16),
-            )
+            if target.module_kind == "conv3d_patch":
+                # Patch width is not generally divisible by the rotation block.
+                # It is lowered to a padded GEMM and intentionally uses identity.
+                self._transforms[target.name] = None
+                self._identity_rows[target.name] = 0
+            else:
+                layer_seed = stable_layer_seed(seed, target.name)
+                permutation, rotations, _ = build_svd_hadamard_transform(
+                    target.module.weight,
+                    block_size=rotation_block_size,
+                    seed=layer_seed,
+                )
+                self._transforms[target.name] = (
+                    permutation.to(target.module.weight.device),
+                    rotations.to(target.module.weight.device, dtype=torch.float16),
+                )
             if target.scope == "dit":
                 self._dit_topk[target.name] = [None] * self.num_steps
                 self._dit_rows[target.name] = [0] * self.num_steps
@@ -100,10 +117,18 @@ class HoloQCalibrationCollector:
         def collect(_module: nn.Module, args: tuple[Any, ...]) -> None:
             if not args or not isinstance(args[0], torch.Tensor):
                 raise RuntimeError(f"{target.name}: expected tensor input during calibration")
-            permutation, rotations = self._transforms[target.name]
-            transformed = apply_input_transform(args[0].detach(), permutation, rotations)
+            transform = self._transforms[target.name]
+            inputs = args[0].detach()
+            if target.module_kind == "conv3d_patch":
+                transformed = inputs.flatten(1)
+            else:
+                permutation, rotations = transform
+                transformed = apply_input_transform(inputs, permutation, rotations)
             rows = transformed.reshape(-1, transformed.shape[-1]).float()
-            if target.scope == "llm":
+            if target.module_kind == "conv3d_patch":
+                self._identity_rows[target.name] += rows.shape[0]
+                return
+            if target.scope in {"llm", "vit"}:
                 self._collect_llm(target.name, rows)
             else:
                 self._collect_dit(target.name, rows)
@@ -162,17 +187,31 @@ class HoloQCalibrationCollector:
         layers: dict[str, dict[str, Any]] = {}
         quantile = self.percentile / 100.0
         for target in self.targets:
-            permutation, rotations = self._transforms[target.name]
+            transform = self._transforms[target.name]
             record: dict[str, Any] = {
                 "scope": target.scope,
-                "permutation": permutation.cpu(),
-                "rotation_blocks": rotations.half().cpu(),
+                "module_kind": target.module_kind,
+                "projection": target.projection,
             }
-            if target.scope == "llm":
+            if transform is None:
+                record["transform"] = "identity"
+                record["permutation"] = None
+                record["rotation_blocks"] = None
+            else:
+                permutation, rotations = transform
+                record["transform"] = "svd-hadamard"
+                record["permutation"] = permutation.cpu()
+                record["rotation_blocks"] = rotations.half().cpu()
+            if target.module_kind == "conv3d_patch":
+                count = self._identity_rows[target.name]
+                if count == 0:
+                    raise RuntimeError(f"No ViT patch activations collected for {target.name}")
+                record["sample_rows"] = count
+            elif target.scope in {"llm", "vit"}:
                 count = self._llm_rows.get(target.name, 0)
                 if count == 0:
                     raise RuntimeError(
-                        f"No LLM calibration activations collected for {target.name}"
+                        f"No {target.scope.upper()} calibration activations collected for {target.name}"
                     )
                 record["sample_rows"] = count
                 record["hessian_blocks"] = (self._llm_hessian[target.name] / count).float().cpu()
@@ -206,10 +245,16 @@ class HoloQCalibrationCollector:
                 "run_id": self.run_id,
                 "config_sha256": model_config_sha256(self.model),
                 "num_inference_timesteps": self.num_steps,
+                "scopes": list(self.scopes),
+                "include_vit_mergers": self.include_vit_mergers,
+                "include_vit_patch_embed": self.include_vit_patch_embed,
                 "llm_layers": self.summary.llm_layers,
                 "dit_layers": self.summary.dit_layers,
+                "vit_layers": self.summary.vit_layers,
                 "llm_linears": self.summary.llm_linears,
                 "dit_linears": self.summary.dit_linears,
+                "vit_linears": self.summary.vit_linears,
+                "vit_patch_convs": self.summary.vit_patch_convs,
                 "rotation": "blockwise-svd-randomized-hadamard",
                 "rotation_block_size": self.rotation_block_size,
                 "permutation": "zigzag-weight-norm",

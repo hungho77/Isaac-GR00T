@@ -19,6 +19,23 @@ def main() -> None:
     parser.add_argument("--suite", required=True, choices=("object", "spatial", "goal", "long"))
     parser.add_argument("--checkpoint-revision", required=True)
     parser.add_argument("--source-revision", required=True)
+    parser.add_argument(
+        "--scopes",
+        default=None,
+        help="Comma-separated scopes; defaults to the calibration manifest (llm,dit or llm,dit,vit)",
+    )
+    parser.add_argument(
+        "--include-vit-mergers", action=argparse.BooleanOptionalAction, default=None
+    )
+    parser.add_argument(
+        "--include-vit-patch-embed", action=argparse.BooleanOptionalAction, default=None
+    )
+    parser.add_argument(
+        "--dit-activation-granularity",
+        choices=("static-per-step-per-channel", "dynamic-per-token"),
+        default="static-per-step-per-channel",
+        help="Use dynamic-per-token for a native-compatible all-scope pack",
+    )
     args = parser.parse_args()
 
     import gr00t.model  # noqa: F401
@@ -32,6 +49,10 @@ def main() -> None:
         checkpoint=args.model_path,
         checkpoint_revision=args.checkpoint_revision,
         source_revision=args.source_revision,
+        scopes=args.scopes,
+        include_vit_mergers=args.include_vit_mergers,
+        include_vit_patch_embed=args.include_vit_patch_embed,
+        dit_activation_granularity=args.dit_activation_granularity,
     )
     print(f"Wrote strict HoloQ W4A4 pack: {output}")
 

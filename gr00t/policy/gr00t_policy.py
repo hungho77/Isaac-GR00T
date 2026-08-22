@@ -92,6 +92,10 @@ class Gr00tPolicy(BasePolicy):
         holoq_suite: str | None = None,
         holoq_calibration_run_id: str | None = None,
         holoq_calibration_topk: int = 512,
+        holoq_backend: str = "fake",
+        holoq_scopes: str = "llm,dit",
+        holoq_include_vit_mergers: bool = True,
+        holoq_include_vit_patch_embed: bool = False,
     ):
         """Initialize the Gr00t Policy.
 
@@ -107,6 +111,8 @@ class Gr00tPolicy(BasePolicy):
             holoq_suite: LIBERO suite associated with calibration/pack use.
             holoq_calibration_run_id: Identifier for the exact rollout set.
             holoq_calibration_topk: Streaming q99.9 order-statistic capacity.
+            holoq_backend: ``fake`` reference or strict CUTLASS ``native`` execution.
+            holoq_scopes: Comma-separated calibration scopes (llm, dit, vit).
         """
         # Import this to register all models.
         import gr00t.model  # noqa: F401
@@ -126,10 +132,18 @@ class Gr00tPolicy(BasePolicy):
                 raise ValueError("holoq_suite is required when loading a HoloQ pack")
             from gr00t.quantization.runtime import apply_holoq_pack
 
-            summary = apply_holoq_pack(model, holoq_pack_path, expected_suite=holoq_suite)
+            summary = apply_holoq_pack(
+                model,
+                holoq_pack_path,
+                expected_suite=holoq_suite,
+                backend=holoq_backend,
+            )
             print(
                 "Applied strict HoloQ W4A4 pack "
-                f"({summary.llm_linears} LLM + {summary.dit_linears} DiT linears)"
+                f"with {holoq_backend} backend "
+                f"({summary.llm_linears} LLM + {summary.dit_linears} DiT + "
+                f"{summary.vit_linears} ViT linears + "
+                f"{summary.vit_patch_convs} ViT patch Conv3d)"
             )
         model.to(device=device, dtype=torch.bfloat16)
         self.model = model
@@ -147,6 +161,9 @@ class Gr00tPolicy(BasePolicy):
                 suite=holoq_suite,
                 run_id=holoq_calibration_run_id,
                 topk=holoq_calibration_topk,
+                scopes=holoq_scopes,
+                include_vit_mergers=holoq_include_vit_mergers,
+                include_vit_patch_embed=holoq_include_vit_patch_embed,
             )
 
         # Load the processor for input/output transformation.

@@ -109,6 +109,10 @@ class Config:
     record_videos: bool
     package_include_videos: bool
     require_l4: bool
+    holoq_backend: str
+    holoq_scopes: str
+    holoq_include_vit_mergers: bool
+    holoq_include_vit_patch_embed: bool
 
     @property
     def suite_root(self) -> Path:
@@ -252,6 +256,10 @@ def _require_manifest(cfg: Config) -> dict[str, Any]:
         "n_action_steps": cfg.n_action_steps,
         "max_episode_steps": cfg.max_episode_steps,
         "calibration_topk": cfg.calibration_topk,
+        "holoq_backend": cfg.holoq_backend,
+        "holoq_scopes": cfg.holoq_scopes,
+        "holoq_include_vit_mergers": cfg.holoq_include_vit_mergers,
+        "holoq_include_vit_patch_embed": cfg.holoq_include_vit_patch_embed,
         "evaluation_trials_per_task": FULL_ROLLOUT_EPISODES_PER_TASK,
     }
     mismatches = {
@@ -343,6 +351,10 @@ def phase_prepare(cfg: Config) -> None:
         "n_action_steps": cfg.n_action_steps,
         "max_episode_steps": cfg.max_episode_steps,
         "calibration_topk": cfg.calibration_topk,
+        "holoq_backend": cfg.holoq_backend,
+        "holoq_scopes": cfg.holoq_scopes,
+        "holoq_include_vit_mergers": cfg.holoq_include_vit_mergers,
+        "holoq_include_vit_patch_embed": cfg.holoq_include_vit_patch_embed,
         "evaluation_trials_per_task": FULL_ROLLOUT_EPISODES_PER_TASK,
         "tasks": list(SUITE_TASKS[cfg.suite]),
         "gpu": gpu_info,
@@ -414,7 +426,16 @@ def _policy_server(
     if mode == "w4a4":
         if not cfg.pack_path.is_file():
             raise RuntimeError("Missing W4A4 pack. Run WORK_PHASE='build_pack'.")
-        command.extend(["--holoq-pack-path", str(cfg.pack_path), "--holoq-suite", cfg.suite])
+        command.extend(
+            [
+                "--holoq-pack-path",
+                str(cfg.pack_path),
+                "--holoq-suite",
+                cfg.suite,
+                "--holoq-backend",
+                cfg.holoq_backend,
+            ]
+        )
     elif mode == "calibration":
         if calibration_output is None:
             raise ValueError("calibration_output is required for calibration mode")
@@ -428,6 +449,18 @@ def _policy_server(
                 f"{cfg.suite}-one-per-task-seed-{cfg.calibration_seed}",
                 "--holoq-calibration-topk",
                 str(cfg.calibration_topk),
+                "--holoq-scopes",
+                cfg.holoq_scopes,
+                (
+                    "--holoq-include-vit-mergers"
+                    if cfg.holoq_include_vit_mergers
+                    else "--no-holoq-include-vit-mergers"
+                ),
+                (
+                    "--holoq-include-vit-patch-embed"
+                    if cfg.holoq_include_vit_patch_embed
+                    else "--no-holoq-include-vit-patch-embed"
+                ),
             ]
         )
     elif mode != "bf16":
@@ -649,6 +682,15 @@ def phase_build_pack(cfg: Config) -> None:
     _validate_l4(cfg)
     if not cfg.calibration_path.is_file():
         raise RuntimeError("Missing calibration artifact. Run WORK_PHASE='calibrate'.")
+    if cfg.holoq_backend == "native":
+        _run(
+            [
+                str(cfg.repo_path / ".venv" / "bin" / "python"),
+                "tools/build_holoq_native_extension.py",
+                "--fetch-cutlass",
+            ],
+            cwd=cfg.repo_path,
+        )
     cfg.pack_path.parent.mkdir(parents=True, exist_ok=True)
     partial_pack = cfg.pack_path.with_name(cfg.pack_path.name + ".partial")
     partial_sidecar = partial_pack.with_suffix(partial_pack.suffix + ".sha256")
@@ -670,6 +712,24 @@ def phase_build_pack(cfg: Config) -> None:
             manifest["checkpoint_revision"],
             "--source-revision",
             manifest["source_revision"],
+            "--scopes",
+            cfg.holoq_scopes,
+            (
+                "--include-vit-mergers"
+                if cfg.holoq_include_vit_mergers
+                else "--no-include-vit-mergers"
+            ),
+            (
+                "--include-vit-patch-embed"
+                if cfg.holoq_include_vit_patch_embed
+                else "--no-include-vit-patch-embed"
+            ),
+            "--dit-activation-granularity",
+            (
+                "dynamic-per-token"
+                if cfg.holoq_backend == "native"
+                else "static-per-step-per-channel"
+            ),
         ],
         cwd=cfg.repo_path,
     )
@@ -687,7 +747,9 @@ def phase_build_pack(cfg: Config) -> None:
         f"p=torch.load({str(cfg.pack_path)!r}, map_location='cpu', weights_only=False); "
         "m=p['manifest']; "
         "print(json.dumps({'suite':m['suite'],'llm_linears':m['llm_linears'],"
-        "'dit_linears':m['dit_linears'],'total_linears':m['total_linears'],"
+        "'dit_linears':m['dit_linears'],'vit_linears':m.get('vit_linears',0),"
+        "'vit_patch_convs':m.get('vit_patch_convs',0),'total_linears':m['total_linears'],"
+        "'scopes':m.get('scopes',['llm','dit']),'runtime_compatible_backends':m.get('runtime_compatible_backends',['fake']),"
         "'num_inference_timesteps':m['num_inference_timesteps'],"
         "'source_revision':m['source_revision'],'checkpoint_revision':m['checkpoint_revision']}))"
     )
@@ -697,17 +759,25 @@ def phase_build_pack(cfg: Config) -> None:
         capture_output=True,
     )
     pack_manifest = json.loads(result.stdout.strip().splitlines()[-1])
+    selected_scopes = {item.strip() for item in cfg.holoq_scopes.split(",") if item.strip()}
     expected = {
         "suite": cfg.suite,
-        "llm_linears": EXPECTED_LLM_LINEARS,
-        "dit_linears": EXPECTED_DIT_LINEARS,
-        "total_linears": EXPECTED_TOTAL_LINEARS,
+        "llm_linears": EXPECTED_LLM_LINEARS if "llm" in selected_scopes else 0,
+        "dit_linears": EXPECTED_DIT_LINEARS if "dit" in selected_scopes else 0,
         "num_inference_timesteps": 4,
         "source_revision": manifest["source_revision"],
         "checkpoint_revision": manifest["checkpoint_revision"],
     }
-    if pack_manifest != expected:
-        raise RuntimeError(f"Strict pack validation failed: {pack_manifest!r} != {expected!r}")
+    for key, value in expected.items():
+        if pack_manifest.get(key) != value:
+            raise RuntimeError(
+                f"Strict pack validation failed for {key}: {pack_manifest.get(key)!r} != {value!r}"
+            )
+    expected_scopes = [scope for scope in ("llm", "dit", "vit") if scope in selected_scopes]
+    if pack_manifest["scopes"] != expected_scopes:
+        raise RuntimeError(f"Pack scopes {pack_manifest['scopes']} != {expected_scopes}")
+    if cfg.holoq_backend not in pack_manifest["runtime_compatible_backends"]:
+        raise RuntimeError(f"Pack is not compatible with requested backend {cfg.holoq_backend!r}")
     _atomic_json(
         cfg.suite_root / "packs" / "index.json",
         {"pack": str(cfg.pack_path), "sha256": pack_sha, "manifest": pack_manifest},
@@ -965,6 +1035,16 @@ def _parse_args() -> Config:
         "--package-include-videos", action=argparse.BooleanOptionalAction, default=False
     )
     parser.add_argument("--require-l4", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--holoq-backend", choices=("fake", "native"), default="fake")
+    parser.add_argument("--holoq-scopes", default="llm,dit")
+    parser.add_argument(
+        "--holoq-include-vit-mergers", action=argparse.BooleanOptionalAction, default=True
+    )
+    parser.add_argument(
+        "--holoq-include-vit-patch-embed",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+    )
     args = parser.parse_args()
     if not 0 <= args.smoke_task_index < EXPECTED_TASKS:
         parser.error(f"--smoke-task-index must be in [0, {EXPECTED_TASKS - 1}]")

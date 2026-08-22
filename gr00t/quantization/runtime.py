@@ -1,12 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Strict fake-quant runtime for GR00T-N1.7 HoloQ W4A4 packs.
-
-This path validates numerical fidelity. It stores INT4 values in int8 tensors
-and dequantizes before ``F.linear``; it does not claim native INT4 latency or
-memory savings. A native W4A4 kernel can consume the same validated pack later.
-"""
+"""Validated fake and native packed-INT4 runtimes for GR00T-N1.7 W4A4."""
 
 from __future__ import annotations
 
@@ -24,11 +19,16 @@ from .packing import (
     ACTIVATION_BITS,
     PACK_FORMAT_VERSION,
     SIGNED_QMAX,
+    SUPPORTED_PACK_FORMAT_VERSIONS,
     WEIGHT_BITS,
     apply_input_transform,
-    symmetric_fake_quantize,
+    pack_signed_int4,
+    unpack_signed_int4,
 )
-from .scope import ScopeSummary, discover_n1d7_targets, validate_n1d7_scope
+from .scope import ScopeSummary, discover_n1d7_targets, normalize_scopes, validate_n1d7_scope
+
+
+SUPPORTED_BACKENDS = frozenset({"fake", "native"})
 
 
 def model_config_sha256(model: nn.Module) -> str:
@@ -58,99 +58,251 @@ def tensor_record_sha256(record: dict[str, Any]) -> str:
     return digest.hexdigest()
 
 
-class HoloQLinear(nn.Module):
-    """Numerical W4A4 replacement for one paper-covered ``nn.Linear``."""
+def _module_dimensions(module: nn.Module) -> tuple[int, int, torch.Tensor | None]:
+    if isinstance(module, nn.Linear):
+        return module.in_features, module.out_features, module.bias
+    if isinstance(module, nn.Conv3d):
+        return module.weight[0].numel(), module.out_channels, module.bias
+    raise TypeError(f"Unsupported quantized module type {type(module).__name__}")
 
-    def __init__(self, linear: nn.Linear, *, name: str, record: dict[str, Any]) -> None:
+
+class _HoloQOperator(nn.Module):
+    """Shared quantized matrix core used by Linear and lowered patch Conv3d."""
+
+    def __init__(
+        self,
+        module: nn.Module,
+        *,
+        name: str,
+        record: dict[str, Any],
+        backend: str,
+    ) -> None:
         super().__init__()
+        if backend not in SUPPORTED_BACKENDS:
+            raise ValueError(f"Unsupported HoloQ backend {backend!r}")
         self.name = name
-        self.in_features = linear.in_features
-        self.out_features = linear.out_features
+        self.backend = backend
+        self.in_features, self.out_features, original_bias = _module_dimensions(module)
         self.scope = str(record["scope"])
         self.solver = str(record["solver"])
+        self.module_kind = str(record.get("module_kind", "linear"))
+        self.transform = str(record.get("transform", "svd-hadamard"))
+        self.activation_granularity = str(
+            record.get(
+                "activation_granularity",
+                "static-per-step-per-channel" if self.scope == "dit" else "dynamic-per-token",
+            )
+        )
 
-        weight_q = record["weight_q"]
+        if "weight_packed" in record:
+            weight_packed = record["weight_packed"]
+            if weight_packed.dtype != torch.uint8 or weight_packed.ndim != 2:
+                raise ValueError(f"{name}: weight_packed must be a rank-2 uint8 tensor")
+            weight_shape = tuple(int(item) for item in record["weight_shape"])
+            if weight_shape != (self.out_features, self.in_features):
+                raise ValueError(
+                    f"{name}: logical weight shape {weight_shape} != "
+                    f"{(self.out_features, self.in_features)}"
+                )
+            padded_in_features = int(record.get("padded_in_features", weight_packed.shape[1] * 2))
+        elif "weight_q" in record:
+            if backend == "native":
+                raise ValueError(
+                    f"{name}: native mode requires a v2 nibble-packed weight, not v1 int8 staging"
+                )
+            weight_q = record["weight_q"]
+            if weight_q.dtype != torch.int8 or tuple(weight_q.shape) != (
+                self.out_features,
+                self.in_features,
+            ):
+                raise ValueError(f"{name}: invalid legacy weight_q tensor")
+            weight_packed, _ = pack_signed_int4(weight_q)
+            padded_in_features = weight_packed.shape[1] * 2
+        else:
+            raise ValueError(f"{name}: record has no quantized weight")
+        if padded_in_features != weight_packed.shape[1] * 2:
+            raise ValueError(f"{name}: packed storage does not match padded_in_features")
+        self.padded_in_features = padded_in_features
+        self.register_buffer("weight_packed", weight_packed.detach().cpu().contiguous())
+
         weight_scale = record["weight_scale"]
-        permutation = record["permutation"]
-        rotations = record["rotation_blocks"]
-        expected_weight_shape = (self.out_features, self.in_features)
-        if tuple(weight_q.shape) != expected_weight_shape:
-            raise ValueError(
-                f"{name}: weight_q shape {tuple(weight_q.shape)} != {expected_weight_shape}"
-            )
-        if weight_q.dtype != torch.int8:
-            raise ValueError(f"{name}: weight_q must use int8 storage, got {weight_q.dtype}")
-        if int(weight_q.min()) < -SIGNED_QMAX or int(weight_q.max()) > SIGNED_QMAX:
-            raise ValueError(f"{name}: weight_q contains values outside [-7, 7]")
         if tuple(weight_scale.shape) != (self.out_features, 1):
-            raise ValueError(
-                f"{name}: weight_scale shape must be {(self.out_features, 1)}, "
-                f"got {tuple(weight_scale.shape)}"
-            )
-        if tuple(permutation.shape) != (self.in_features,):
-            raise ValueError(f"{name}: invalid permutation shape {tuple(permutation.shape)}")
-        if rotations.ndim != 3 or rotations.shape[1] != rotations.shape[2]:
-            raise ValueError(f"{name}: rotation_blocks must have shape [blocks, B, B]")
-        if rotations.shape[0] * rotations.shape[1] != self.in_features:
-            raise ValueError(f"{name}: rotation blocks do not cover all input channels")
-
-        self.register_buffer("weight_q", weight_q.detach().cpu())
+            raise ValueError(f"{name}: invalid weight_scale shape {tuple(weight_scale.shape)}")
         self.register_buffer("weight_scale", weight_scale.detach().float().cpu())
-        self.register_buffer("permutation", permutation.detach().long().cpu())
-        self.register_buffer("rotation_blocks", rotations.detach().float().cpu())
-        if linear.bias is None:
+        bias_value = record["bias"] if "bias" in record else original_bias
+        if bias_value is None:
             self.bias = None
         else:
-            self.register_buffer("bias", linear.bias.detach().clone())
+            if tuple(bias_value.shape) != (self.out_features,):
+                raise ValueError(f"{name}: invalid bias shape {tuple(bias_value.shape)}")
+            self.register_buffer("bias", bias_value.detach().clone())
+
+        permutation = record.get("permutation")
+        rotations = record.get("rotation_blocks")
+        if self.transform == "identity":
+            self.permutation = None
+            self.rotation_blocks = None
+        else:
+            if not isinstance(permutation, torch.Tensor) or tuple(permutation.shape) != (
+                self.in_features,
+            ):
+                raise ValueError(f"{name}: invalid permutation")
+            if not isinstance(rotations, torch.Tensor) or rotations.ndim != 3:
+                raise ValueError(f"{name}: invalid rotation_blocks")
+            if rotations.shape[0] * rotations.shape[1] != self.in_features:
+                raise ValueError(f"{name}: rotation blocks do not cover all input channels")
+            self.register_buffer("permutation", permutation.detach().long().cpu())
+            self.register_buffer("rotation_blocks", rotations.detach().float().cpu())
 
         activation_scale = record.get("activation_scale")
-        if self.scope == "dit":
-            if not isinstance(activation_scale, torch.Tensor):
-                raise ValueError(f"{name}: DiT record is missing its per-step activation table")
+        if self.activation_granularity == "dynamic-per-token":
+            if activation_scale is not None:
+                raise ValueError(f"{name}: dynamic activation records must not store a scale table")
+            self.activation_scale = None
+        elif self.activation_granularity == "static-per-step-per-channel":
+            if self.scope != "dit" or not isinstance(activation_scale, torch.Tensor):
+                raise ValueError(f"{name}: static per-step activation tables are DiT-only")
             if activation_scale.ndim != 2 or activation_scale.shape[1] != self.in_features:
+                raise ValueError(f"{name}: invalid DiT activation scale table")
+            if backend == "native":
                 raise ValueError(
-                    f"{name}: activation_scale must have shape [steps, {self.in_features}]"
+                    f"{name}: exact per-channel K scaling cannot use one native INT4 GEMM. "
+                    "Build a native-compatible dynamic-per-token DiT pack instead."
                 )
             self.register_buffer("activation_scale", activation_scale.detach().float().cpu())
-        elif self.scope == "llm":
-            if activation_scale is not None:
-                raise ValueError(f"{name}: LLM activations must use dynamic per-token scales")
-            self.activation_scale = None
         else:
-            raise ValueError(f"{name}: unsupported quantization scope {self.scope!r}")
+            raise ValueError(
+                f"{name}: unsupported activation granularity {self.activation_granularity!r}"
+            )
+
+    def _transform_and_pad(self, inputs: torch.Tensor) -> torch.Tensor:
+        if inputs.shape[-1] != self.in_features:
+            raise ValueError(f"{self.name}: input width {inputs.shape[-1]} != {self.in_features}")
+        if self.transform == "identity":
+            transformed = inputs
+        else:
+            transformed = apply_input_transform(inputs, self.permutation, self.rotation_blocks)
+        if self.padded_in_features > self.in_features:
+            transformed = F.pad(transformed, (0, self.padded_in_features - self.in_features))
+        return transformed
+
+    def _activation_codes_and_scale(
+        self, transformed: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        if self.activation_granularity == "dynamic-per-token":
+            scale = transformed.abs().amax(dim=-1, keepdim=True).clamp_min(1e-8) / SIGNED_QMAX
+        else:
+            step = get_dit_quant_step()
+            total_steps = get_dit_quant_total_steps()
+            if step is None or total_steps is None:
+                raise RuntimeError(
+                    f"{self.name}: DiT W4A4 inference requires an active denoising-step context"
+                )
+            table_steps = self.activation_scale.shape[0]
+            if total_steps != table_steps:
+                raise RuntimeError(
+                    f"{self.name}: runtime uses {total_steps} denoising steps but pack has "
+                    f"{table_steps}"
+                )
+            scale = self.activation_scale[step].to(transformed.device, transformed.dtype)
+            if self.padded_in_features > self.in_features:
+                scale = F.pad(scale, (0, self.padded_in_features - self.in_features), value=1.0)
+        codes = torch.round(transformed / scale).clamp(-SIGNED_QMAX, SIGNED_QMAX).to(torch.int8)
+        return codes, scale
+
+    def _fake_forward(self, transformed: torch.Tensor) -> torch.Tensor:
+        codes, activation_scale = self._activation_codes_and_scale(transformed)
+        activation = codes.to(transformed.dtype) * activation_scale
+        weight_codes = unpack_signed_int4(
+            self.weight_packed, logical_width=self.padded_in_features
+        ).to(device=transformed.device, dtype=transformed.dtype)
+        weight = weight_codes * self.weight_scale.to(transformed.device, transformed.dtype)
+        bias = None if self.bias is None else self.bias.to(transformed.device, transformed.dtype)
+        return F.linear(activation, weight, bias)
+
+    def _native_forward(self, transformed: torch.Tensor) -> torch.Tensor:
+        from .native import native_int4_mm
+
+        shape = transformed.shape
+        rows = transformed.reshape(-1, shape[-1])
+        codes, activation_scale = self._activation_codes_and_scale(rows)
+        activation_packed, _ = pack_signed_int4(codes, pad_to=64)
+        accumulator = native_int4_mm(
+            activation_packed,
+            self.weight_packed.to(device=rows.device),
+            logical_k=self.in_features,
+        )
+        output = accumulator.float()
+        output.mul_(activation_scale.float())
+        output.mul_(self.weight_scale.to(device=rows.device).T)
+        if self.bias is not None:
+            output.add_(self.bias.to(device=rows.device, dtype=output.dtype))
+        return output.to(dtype=transformed.dtype).reshape(*shape[:-1], self.out_features)
+
+    def _forward_matrix(self, inputs: torch.Tensor) -> torch.Tensor:
+        transformed = self._transform_and_pad(inputs)
+        if self.backend == "native":
+            return self._native_forward(transformed)
+        return self._fake_forward(transformed)
+
+
+class HoloQLinear(_HoloQOperator):
+    """Fake W4A4 Linear using the same packed artifact as native execution."""
+
+    def __init__(
+        self, linear: nn.Linear, *, name: str, record: dict[str, Any], backend: str = "fake"
+    ) -> None:
+        if not isinstance(linear, nn.Linear):
+            raise TypeError("HoloQLinear can only replace nn.Linear")
+        super().__init__(linear, name=name, record=record, backend=backend)
+
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        return self._forward_matrix(inputs)
 
     def extra_repr(self) -> str:
         return (
             f"in_features={self.in_features}, out_features={self.out_features}, "
-            f"scope={self.scope}, solver={self.solver}, W4A4"
+            f"scope={self.scope}, backend={self.backend}, W4A4"
         )
 
-    def _quantize_activation(self, transformed: torch.Tensor) -> torch.Tensor:
-        if self.scope == "llm":
-            scale = transformed.abs().amax(dim=-1, keepdim=True).clamp_min(1e-8)
-            return symmetric_fake_quantize(transformed, scale / SIGNED_QMAX)
 
-        step = get_dit_quant_step()
-        total_steps = get_dit_quant_total_steps()
-        if step is None or total_steps is None:
-            raise RuntimeError(
-                f"{self.name}: DiT W4A4 inference requires an active denoising-step context"
+class NativeHoloQLinear(HoloQLinear):
+    def __init__(self, linear: nn.Linear, *, name: str, record: dict[str, Any]) -> None:
+        super().__init__(linear, name=name, record=record, backend="native")
+
+
+class HoloQPatchConv3d(_HoloQOperator):
+    """Qwen3-VL non-overlapping patch Conv3d lowered to the W4A4 matrix core."""
+
+    def __init__(
+        self, conv: nn.Conv3d, *, name: str, record: dict[str, Any], backend: str = "fake"
+    ) -> None:
+        if (
+            conv.groups != 1
+            or tuple(conv.padding) != (0, 0, 0)
+            or tuple(conv.dilation)
+            != (
+                1,
+                1,
+                1,
             )
-        table_steps = self.activation_scale.shape[0]
-        if total_steps != table_steps:
-            raise RuntimeError(
-                f"{self.name}: runtime uses {total_steps} denoising steps but pack has "
-                f"{table_steps}; build a matching pack instead of falling back"
-            )
-        return symmetric_fake_quantize(transformed, self.activation_scale[step])
+        ):
+            raise ValueError(f"{name}: only the Qwen3-VL patch Conv3d can be lowered")
+        if tuple(conv.kernel_size) != tuple(conv.stride):
+            raise ValueError(f"{name}: patch Conv3d kernel and stride must match")
+        self.kernel_size = tuple(conv.kernel_size)
+        self.in_channels = conv.in_channels
+        super().__init__(conv, name=name, record=record, backend=backend)
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
-        transformed = apply_input_transform(inputs, self.permutation, self.rotation_blocks)
-        quantized_inputs = self._quantize_activation(transformed)
-        weight = self.weight_q.to(device=inputs.device, dtype=inputs.dtype)
-        weight = weight * self.weight_scale.to(device=inputs.device, dtype=inputs.dtype)
-        bias = None if self.bias is None else self.bias.to(device=inputs.device, dtype=inputs.dtype)
-        return F.linear(quantized_inputs, weight, bias)
+        expected = (self.in_channels, *self.kernel_size)
+        if tuple(inputs.shape[1:]) != expected:
+            raise ValueError(
+                f"{self.name}: patch lowering expects per-patch input [B, {expected}], "
+                f"got {tuple(inputs.shape)}"
+            )
+        output = self._forward_matrix(inputs.flatten(1))
+        return output[:, :, None, None, None]
 
 
 def _parent_and_attribute(model: nn.Module, name: str) -> tuple[nn.Module, str]:
@@ -177,7 +329,7 @@ def load_holoq_pack(path: str | Path) -> dict[str, Any]:
         raise ValueError(f"HoloQ pack file checksum mismatch: {pack_path}")
     try:
         pack = torch.load(pack_path, map_location="cpu", weights_only=True)
-    except TypeError:  # pragma: no cover - compatibility with older PyTorch
+    except TypeError:  # pragma: no cover
         pack = torch.load(pack_path, map_location="cpu")
     if not isinstance(pack, dict):
         raise ValueError("HoloQ pack root must be a dictionary")
@@ -185,19 +337,32 @@ def load_holoq_pack(path: str | Path) -> dict[str, Any]:
 
 
 def apply_holoq_pack(
-    model: nn.Module, path: str | Path, *, expected_suite: str | None = None
+    model: nn.Module,
+    path: str | Path,
+    *,
+    expected_suite: str | None = None,
+    backend: str = "fake",
 ) -> ScopeSummary:
-    """Validate and apply a complete pack; partial/fallback loading is forbidden."""
+    """Validate and atomically replace every declared W4A4 target."""
 
+    if backend not in SUPPORTED_BACKENDS:
+        raise ValueError(f"backend must be one of {sorted(SUPPORTED_BACKENDS)}")
     pack = load_holoq_pack(path)
     manifest = pack.get("manifest")
     records = pack.get("layers")
     if not isinstance(manifest, dict) or not isinstance(records, dict):
         raise ValueError("Pack must contain dictionary fields 'manifest' and 'layers'")
-    if manifest.get("format_version") != PACK_FORMAT_VERSION:
+    version = manifest.get("format_version")
+    if version not in SUPPORTED_PACK_FORMAT_VERSIONS:
         raise ValueError(
-            f"Unsupported pack format {manifest.get('format_version')}; "
-            f"expected {PACK_FORMAT_VERSION}"
+            f"Unsupported pack format {version}; supported={sorted(SUPPORTED_PACK_FORMAT_VERSIONS)}"
+        )
+    if backend == "native" and version != PACK_FORMAT_VERSION:
+        raise ValueError("Native execution requires a v2 physically packed INT4 artifact")
+    compatible_backends = manifest.get("runtime_compatible_backends")
+    if compatible_backends is not None and backend not in compatible_backends:
+        raise ValueError(
+            f"Pack declares backends {compatible_backends}, not requested backend {backend!r}"
         )
     if manifest.get("algorithm") != "holoq-vla":
         raise ValueError(f"Unsupported pack algorithm {manifest.get('algorithm')!r}")
@@ -215,16 +380,25 @@ def apply_holoq_pack(
     ):
         raise ValueError("Only uniform W4A4 packs are supported")
 
-    targets = discover_n1d7_targets(model)
+    scopes = normalize_scopes(manifest.get("scopes", ("llm", "dit")))
+    include_vit_mergers = bool(manifest.get("include_vit_mergers", False))
+    include_vit_patch_embed = bool(manifest.get("include_vit_patch_embed", False))
+    targets = discover_n1d7_targets(
+        model,
+        scopes=scopes,
+        include_vit_mergers=include_vit_mergers,
+        include_vit_patch_embed=include_vit_patch_embed,
+    )
     summary = validate_n1d7_scope(
         targets,
-        expected_llm_layers=int(manifest["llm_layers"]),
-        expected_dit_layers=int(manifest["dit_layers"]),
+        expected_llm_layers=int(manifest.get("llm_layers", 0)),
+        expected_dit_layers=int(manifest.get("dit_layers", 0)),
+        expected_vit_layers=int(manifest.get("vit_layers", 0)),
+        scopes=scopes,
     )
     target_names = {target.name for target in targets}
-    record_names = set(records)
-    missing = sorted(target_names - record_names)
-    extra = sorted(record_names - target_names)
+    missing = sorted(target_names - set(records))
+    extra = sorted(set(records) - target_names)
     if missing or extra:
         raise ValueError(
             "Pack coverage does not exactly match the model: "
@@ -232,22 +406,33 @@ def apply_holoq_pack(
         )
     if manifest.get("config_sha256") != model_config_sha256(model):
         raise ValueError("Pack config hash does not match the loaded checkpoint")
+    if "dit" in scopes:
+        model_steps = int(model.action_head.num_inference_timesteps)
+        if model_steps != int(manifest["num_inference_timesteps"]):
+            raise ValueError("Checkpoint and pack denoising-step counts differ")
 
-    model_steps = int(model.action_head.num_inference_timesteps)
-    pack_steps = int(manifest["num_inference_timesteps"])
-    if model_steps != pack_steps:
-        raise ValueError(
-            f"Checkpoint uses {model_steps} denoising steps but pack uses {pack_steps}"
-        )
-
+    replacements: list[tuple[nn.Module, str, nn.Module]] = []
     for target in targets:
         record = records[target.name]
         if record.get("sha256") != tensor_record_sha256(record):
             raise ValueError(f"Layer record checksum mismatch: {target.name}")
         if record.get("scope") != target.scope:
             raise ValueError(f"Layer scope mismatch for {target.name}")
+        if record.get("module_kind", "linear") != target.module_kind:
+            raise ValueError(f"Module kind mismatch for {target.name}")
+        if target.module_kind == "conv3d_patch":
+            replacement = HoloQPatchConv3d(
+                target.module, name=target.name, record=record, backend=backend
+            )
+        elif backend == "native":
+            replacement = NativeHoloQLinear(target.module, name=target.name, record=record)
+        else:
+            replacement = HoloQLinear(target.module, name=target.name, record=record)
         parent, attribute = _parent_and_attribute(model, target.name)
-        setattr(parent, attribute, HoloQLinear(target.module, name=target.name, record=record))
+        replacements.append((parent, attribute, replacement))
+    for parent, attribute, replacement in replacements:
+        setattr(parent, attribute, replacement)
 
     model.holoq_manifest = manifest
+    model.holoq_backend = backend
     return summary

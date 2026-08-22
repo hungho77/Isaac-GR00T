@@ -102,6 +102,18 @@ class ServerConfig:
     holoq_calibration_topk: int = 512
     """Per-channel order-statistic capacity used to estimate q99.9"""
 
+    holoq_backend: str = "fake"
+    """W4A4 runtime: fake reference or strict native CUTLASS INT4"""
+
+    holoq_scopes: str = "llm,dit"
+    """Comma-separated calibration scopes: llm,dit,vit"""
+
+    holoq_include_vit_mergers: bool = True
+    """Include Qwen3-VL merger and DeepStack merger Linear modules"""
+
+    holoq_include_vit_patch_embed: bool = False
+    """Include patch Conv3d lowered to the W4A4 GEMM backend"""
+
 
 def main(config: ServerConfig):
     config.embodiment_tag = EmbodimentTag.resolve(config.embodiment_tag)
@@ -112,6 +124,7 @@ def main(config: ServerConfig):
     print(f"  Host: {config.host}")
     print(f"  Port: {config.port}")
     print(f"  HoloQ pack: {config.holoq_pack_path}")
+    print(f"  HoloQ backend: {config.holoq_backend}")
     print(f"  HoloQ calibration output: {config.holoq_calibration_output}")
 
     # Create and start the server
@@ -130,6 +143,10 @@ def main(config: ServerConfig):
             holoq_suite=config.holoq_suite,
             holoq_calibration_run_id=config.holoq_calibration_run_id,
             holoq_calibration_topk=config.holoq_calibration_topk,
+            holoq_backend=config.holoq_backend,
+            holoq_scopes=config.holoq_scopes,
+            holoq_include_vit_mergers=config.holoq_include_vit_mergers,
+            holoq_include_vit_patch_embed=config.holoq_include_vit_patch_embed,
         )
         calibration_policy = policy
     elif config.dataset_path is not None:

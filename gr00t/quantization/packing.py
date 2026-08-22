@@ -11,10 +11,63 @@ import math
 import torch
 
 
-PACK_FORMAT_VERSION = 1
+PACK_FORMAT_VERSION = 2
+SUPPORTED_PACK_FORMAT_VERSIONS = frozenset({1, PACK_FORMAT_VERSION})
 WEIGHT_BITS = 4
 ACTIVATION_BITS = 4
 SIGNED_QMAX = 7
+SIGNED_QMIN = -7
+
+
+def pad_to_multiple(value: int, multiple: int) -> int:
+    """Round a positive dimension up without silently accepting invalid input."""
+
+    if value <= 0 or multiple <= 0:
+        raise ValueError(f"value and multiple must be positive, got {value}, {multiple}")
+    return ((value + multiple - 1) // multiple) * multiple
+
+
+def pack_signed_int4(values: torch.Tensor, *, pad_to: int = 2) -> tuple[torch.Tensor, int]:
+    """Pack signed values in ``[-7, 7]`` into low/high nibbles along the last axis.
+
+    The returned tensor uses uint8 storage and contains two two's-complement INT4
+    values per byte. ``logical_width`` is returned so padding can be removed when
+    unpacking. ``pad_to`` is expressed in logical INT4 elements and is useful for
+    native GEMM K-alignment.
+    """
+
+    if values.ndim == 0:
+        raise ValueError("INT4 packing requires at least one dimension")
+    if values.dtype != torch.int8:
+        raise ValueError(f"INT4 values must use int8 staging, got {values.dtype}")
+    if values.numel() and (int(values.min()) < SIGNED_QMIN or int(values.max()) > SIGNED_QMAX):
+        raise ValueError("INT4 values must be in the signed symmetric range [-7, 7]")
+    logical_width = values.shape[-1]
+    padded_width = pad_to_multiple(logical_width, max(2, pad_to))
+    if padded_width % 2:
+        padded_width += 1
+    if padded_width != logical_width:
+        values = torch.nn.functional.pad(values, (0, padded_width - logical_width))
+    nibbles = values.to(torch.int16).bitwise_and(0xF).to(torch.uint8)
+    packed = nibbles[..., 0::2] | (nibbles[..., 1::2] << 4)
+    return packed.contiguous(), logical_width
+
+
+def unpack_signed_int4(packed: torch.Tensor, *, logical_width: int) -> torch.Tensor:
+    """Unpack low/high nibbles into an int8 tensor with two's-complement sign."""
+
+    if packed.ndim == 0 or packed.dtype != torch.uint8:
+        raise ValueError("Packed INT4 storage must be a uint8 tensor with rank >= 1")
+    if logical_width <= 0 or logical_width > packed.shape[-1] * 2:
+        raise ValueError(
+            f"logical_width={logical_width} is incompatible with packed width {packed.shape[-1]}"
+        )
+    low = (packed & 0xF).to(torch.int8)
+    high = ((packed >> 4) & 0xF).to(torch.int8)
+    low = torch.where(low >= 8, low - 16, low)
+    high = torch.where(high >= 8, high - 16, high)
+    unpacked = torch.stack((low, high), dim=-1).flatten(-2)
+    return unpacked[..., :logical_width].contiguous()
 
 
 def stable_layer_seed(base_seed: int, layer_name: str) -> int:

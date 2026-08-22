@@ -1,7 +1,8 @@
 # GR00T-N1.7 HoloQ W4A4 on LIBERO
 
-This directory defines the reference numerical path for applying the paper's
-uniform W4A4 method to the four published GR00T-N1.7 LIBERO checkpoints.
+This directory defines both the fake numerical reference and strict native
+packed-INT4 execution paths for applying uniform W4A4 to the four published
+GR00T-N1.7 LIBERO checkpoints.
 
 ## Fixed scope and primary configuration
 
@@ -11,6 +12,10 @@ uniform W4A4 method to the four published GR00T-N1.7 LIBERO checkpoints.
   The strict scope is 112 LLM linears plus 192 DiT linears, or 304 total.
 - Vision, embeddings, state/action/timestep encoders, output projectors, and
   `vl_self_attention` are not part of the paper-equivalent scope.
+- The optional `vit` extension covers Qwen3-VL block `qkv`, attention output,
+  MLP linears, merger/DeepStack merger linears, and optionally lowers the
+  non-overlapping patch `Conv3d` to the same W4A4 GEMM core. Vision embeddings,
+  norms, RoPE, QK/AV attention matmuls, and softmax remain high precision.
 - Weights and activations use signed symmetric W4A4 in `[-7, 7]`.
 - Each input block uses a weight-norm zigzag permutation followed by a
   randomized `SVD * Hadamard` rotation with block size 64.
@@ -103,10 +108,34 @@ Report every suite separately and the unweighted four-suite average. Run the
 same seeds for FP16 and W4A4, and retain action trajectories to check for spikes
 or drift, especially on Long.
 
-## Runtime limitation
+## Fake and native backends
 
-`HoloQLinear` is a strict fake-quant reference: INT4 values are held in int8
-containers and dequantized before `F.linear`. It is suitable for accuracy and
-closed-loop validation, but it does not provide native INT4 memory or latency
-gains. A production deployment still needs an INT4 x INT4 kernel backend with
-INT32 accumulation and pack conversion tests against this reference path.
+Pack format v2 stores two signed INT4 values per byte and is shared by both
+backends. `--holoq-backend fake` unpacks and dequantizes as a numerical golden
+reference. `--holoq-backend native` invokes the bundled CUTLASS extension for
+signed INT4 x INT4 tensor-core GEMM with INT32 accumulation. Native mode never
+falls back to `F.linear`.
+
+Set `HOLOQ_CUTLASS_ROOT` to a CUTLASS checkout and precompile on the target GPU:
+
+```bash
+uv run python tools/build_holoq_native_extension.py --cutlass-root /opt/cutlass
+```
+
+To calibrate the complete transformer scope, pass
+`--holoq-scopes llm,dit,vit`. Add `--holoq-include-vit-patch-embed` only when
+patch-embedding quantization is intended. Build a native-compatible pack with:
+
+```bash
+uv run python tools/build_holoq_n1d7_pack.py \
+  ... \
+  --scopes llm,dit,vit \
+  --include-vit-mergers \
+  --include-vit-patch-embed \
+  --dit-activation-granularity dynamic-per-token
+```
+
+The original DiT q99.9 per-step/per-channel activation table remains available
+to the fake paper-reference path. It cannot be factored out of a single integer
+GEMM because its scale varies inside K; native mode therefore requires the
+explicit dynamic-per-token DiT variant and rejects incompatible packs.
