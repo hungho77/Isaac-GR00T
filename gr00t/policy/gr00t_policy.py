@@ -20,6 +20,8 @@ This module provides the core policy classes for running Gr00t models:
 - Gr00tSimPolicyWrapper: Wrapper for compatibility with existing Gr00t simulation environments
 """
 
+import hashlib
+import json
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +34,14 @@ from gr00t.data.interfaces import BaseProcessor
 from gr00t.data.types import MessageType, ModalityConfig, VLAStepData
 
 from .policy import BasePolicy, PolicyWrapper
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(8 * 1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _rec_to_dtype(x: Any, dtype: torch.dtype) -> Any:
@@ -56,6 +66,20 @@ def _rec_to_dtype(x: Any, dtype: torch.dtype) -> Any:
         return [_rec_to_dtype(v, dtype) for v in x]
     else:
         return x
+
+
+def _rec_to_cpu(x: Any) -> Any:
+    """Create a serialization-safe CPU replay of nested model inputs."""
+
+    if isinstance(x, torch.Tensor):
+        return x.detach().cpu().clone()
+    if isinstance(x, dict) or hasattr(x, "items"):
+        return {k: _rec_to_cpu(v) for k, v in x.items()}  # type: ignore
+    if isinstance(x, list):
+        return [_rec_to_cpu(v) for v in x]
+    if isinstance(x, tuple):
+        return tuple(_rec_to_cpu(v) for v in x)
+    return x
 
 
 def _sim_language_batch_to_sequence(value: Any) -> Any:
@@ -96,6 +120,8 @@ class Gr00tPolicy(BasePolicy):
         holoq_scopes: str = "llm,dit",
         holoq_include_vit_mergers: bool = True,
         holoq_include_vit_patch_embed: bool = False,
+        holoq_dit_activation_granularity: str = "static-per-step-per-channel",
+        holoq_replay_output: str | None = None,
     ):
         """Initialize the Gr00t Policy.
 
@@ -122,8 +148,38 @@ class Gr00tPolicy(BasePolicy):
             embodiment_tag = EmbodimentTag.resolve(embodiment_tag)
         model_dir = Path(model_path)
 
-        # Load the pretrained model and move to target device with bfloat16 precision
-        model = AutoModel.from_pretrained(model_dir)
+        # Load the pretrained model and move to target device with bfloat16 precision.
+        # A compact native checkpoint intentionally omits tensors owned by the W4A4 pack.
+        compact_manifest_path = model_dir / "holoq_native_deployment.json"
+        if compact_manifest_path.is_file():
+            if holoq_pack_path is None or holoq_backend != "native":
+                raise ValueError("A compact HoloQ checkpoint requires a native W4A4 pack")
+            compact_manifest = json.loads(compact_manifest_path.read_text(encoding="utf-8"))
+            digest = _file_sha256(Path(holoq_pack_path))
+            if digest != compact_manifest.get("pack_sha256"):
+                raise ValueError("Compact checkpoint and W4A4 pack checksums differ")
+            model, loading_info = AutoModel.from_pretrained(
+                model_dir,
+                dtype=torch.bfloat16,
+                output_loading_info=True,
+            )
+            expected_missing = set(compact_manifest.get("excluded_state_keys", []))
+            actual_missing = set(loading_info.get("missing_keys", []))
+            if (
+                actual_missing != expected_missing
+                or loading_info.get("unexpected_keys")
+                or loading_info.get("mismatched_keys")
+                or loading_info.get("error_msgs")
+            ):
+                raise RuntimeError(
+                    "Compact checkpoint loading contract failed: "
+                    f"missing_delta={sorted(actual_missing ^ expected_missing)[:10]}, "
+                    f"unexpected={loading_info.get('unexpected_keys', [])[:10]}, "
+                    f"mismatched={loading_info.get('mismatched_keys', [])[:10]}, "
+                    f"errors={loading_info.get('error_msgs', [])[:3]}"
+                )
+        else:
+            model = AutoModel.from_pretrained(model_dir, dtype=torch.bfloat16)
         model.eval()  # Set model to evaluation mode
         if holoq_pack_path is not None and holoq_calibration_output is not None:
             raise ValueError("Cannot load a HoloQ pack while collecting HoloQ calibration")
@@ -147,6 +203,7 @@ class Gr00tPolicy(BasePolicy):
             )
         model.to(device=device, dtype=torch.bfloat16)
         self.model = model
+        self._holoq_replay_output = Path(holoq_replay_output) if holoq_replay_output else None
         self._holoq_calibration_output = holoq_calibration_output
         self._holoq_calibrator = None
         if holoq_calibration_output is not None:
@@ -164,6 +221,7 @@ class Gr00tPolicy(BasePolicy):
                 scopes=holoq_scopes,
                 include_vit_mergers=holoq_include_vit_mergers,
                 include_vit_patch_embed=holoq_include_vit_patch_embed,
+                dit_activation_granularity=holoq_dit_activation_granularity,
             )
 
         # Load the processor for input/output transformation.
@@ -475,6 +533,20 @@ class Gr00tPolicy(BasePolicy):
         # Step 3: Collate processed inputs into a single batch for model
         collated_inputs = self.collate_fn(processed_inputs)
         collated_inputs = _rec_to_dtype(collated_inputs, dtype=torch.bfloat16)
+        if self._holoq_replay_output is not None and not self._holoq_replay_output.is_file():
+            self._holoq_replay_output.parent.mkdir(parents=True, exist_ok=True)
+            temporary = self._holoq_replay_output.with_suffix(
+                self._holoq_replay_output.suffix + ".partial"
+            )
+            torch.save(
+                {
+                    "schema_version": 1,
+                    "model_inputs": _rec_to_cpu(collated_inputs),
+                    "embodiment_tag": str(self.embodiment_tag),
+                },
+                temporary,
+            )
+            temporary.replace(self._holoq_replay_output)
 
         # Step 4: Run model inference to predict actions
         with torch.inference_mode():

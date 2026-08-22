@@ -82,6 +82,7 @@ class _HoloQOperator(nn.Module):
             raise ValueError(f"Unsupported HoloQ backend {backend!r}")
         self.name = name
         self.backend = backend
+        self.native_call_count = 0
         self.in_features, self.out_features, original_bias = _module_dimensions(module)
         self.scope = str(record["scope"])
         self.solver = str(record["solver"])
@@ -175,6 +176,17 @@ class _HoloQOperator(nn.Module):
                 f"{name}: unsupported activation granularity {self.activation_granularity!r}"
             )
 
+    def _apply(self, fn):
+        super()._apply(fn)
+        # Scales and the fused native epilogue bias are numerical metadata.
+        # Preserve FP32 after model.to(dtype=bf16) while retaining the requested device.
+        self.weight_scale = self.weight_scale.float()
+        if isinstance(getattr(self, "activation_scale", None), torch.Tensor):
+            self.activation_scale = self.activation_scale.float()
+        if isinstance(getattr(self, "bias", None), torch.Tensor):
+            self.bias = self.bias.float()
+        return self
+
     def _transform_and_pad(self, inputs: torch.Tensor) -> torch.Tensor:
         if inputs.shape[-1] != self.in_features:
             raise ValueError(f"{self.name}: input width {inputs.shape[-1]} != {self.in_features}")
@@ -221,23 +233,29 @@ class _HoloQOperator(nn.Module):
         return F.linear(activation, weight, bias)
 
     def _native_forward(self, transformed: torch.Tensor) -> torch.Tensor:
-        from .native import native_int4_mm
+        from .native import native_dequantize, native_int4_mm, native_quantize_pack
 
         shape = transformed.shape
         rows = transformed.reshape(-1, shape[-1])
-        codes, activation_scale = self._activation_codes_and_scale(rows)
-        activation_packed, _ = pack_signed_int4(codes, pad_to=64)
+        if self.activation_granularity != "dynamic-per-token":
+            raise RuntimeError(f"{self.name}: native execution requires dynamic-per-token W4A4")
+        activation_packed, activation_scale = native_quantize_pack(
+            rows, padded_k=self.padded_in_features
+        )
         accumulator = native_int4_mm(
             activation_packed,
             self.weight_packed.to(device=rows.device),
             logical_k=self.in_features,
         )
-        output = accumulator.float()
-        output.mul_(activation_scale.float())
-        output.mul_(self.weight_scale.to(device=rows.device).T)
-        if self.bias is not None:
-            output.add_(self.bias.to(device=rows.device, dtype=output.dtype))
-        return output.to(dtype=transformed.dtype).reshape(*shape[:-1], self.out_features)
+        output = native_dequantize(
+            accumulator,
+            activation_scale,
+            self.weight_scale,
+            self.bias,
+            output_dtype=transformed.dtype,
+        )
+        self.native_call_count += 1
+        return output.reshape(*shape[:-1], self.out_features)
 
     def _forward_matrix(self, inputs: torch.Tensor) -> torch.Tensor:
         transformed = self._transform_and_pad(inputs)
@@ -436,3 +454,22 @@ def apply_holoq_pack(
     model.holoq_manifest = manifest
     model.holoq_backend = backend
     return summary
+
+
+def native_coverage(model: nn.Module) -> dict[str, Any]:
+    """Return auditable native-call coverage with no implicit fallback allowance."""
+
+    modules = [module for module in model.modules() if isinstance(module, _HoloQOperator)]
+    native_modules = [module for module in modules if module.backend == "native"]
+    called = [module for module in native_modules if module.native_call_count > 0]
+    return {
+        "quantized_modules": len(modules),
+        "native_modules": len(native_modules),
+        "called_native_modules": len(called),
+        "uncalled_native_modules": [
+            module.name for module in native_modules if not module.native_call_count
+        ],
+        "non_native_modules": [module.name for module in modules if module.backend != "native"],
+        "native_calls": {module.name: module.native_call_count for module in native_modules},
+        "silent_fallback": False,
+    }

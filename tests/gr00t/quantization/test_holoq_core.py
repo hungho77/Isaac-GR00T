@@ -25,6 +25,7 @@ from gr00t.quantization.runtime import (
     NativeHoloQLinear,
     apply_holoq_pack,
     model_config_sha256,
+    native_coverage,
     tensor_record_sha256,
 )
 from gr00t.quantization.scope import discover_n1d7_targets, validate_n1d7_scope
@@ -295,6 +296,28 @@ def test_native_runtime_rejects_non_factorable_dit_channel_scales() -> None:
     )
     with pytest.raises(ValueError, match="cannot use one native INT4 GEMM"):
         NativeHoloQLinear(linear, name="dit", record=record)
+
+
+def test_native_coverage_reports_every_declared_operator() -> None:
+    linear = nn.Linear(16, 8)
+    record = _record(linear, "llm")
+    weight_packed, logical_width = pack_signed_int4(record.pop("weight_q"), pad_to=64)
+    record.update(
+        {
+            "weight_packed": weight_packed,
+            "weight_shape": [8, logical_width],
+            "padded_in_features": weight_packed.shape[1] * 2,
+            "activation_granularity": "dynamic-per-token",
+        }
+    )
+    model = nn.Sequential(NativeHoloQLinear(linear, name="llm", record=record))
+    initial = native_coverage(model)
+    assert initial["native_modules"] == 1
+    assert initial["called_native_modules"] == 0
+    model[0].native_call_count = 3
+    exercised = native_coverage(model)
+    assert exercised["called_native_modules"] == 1
+    assert exercised["native_calls"] == {"llm": 3}
 
 
 def test_llm_runtime_uses_dynamic_per_token_activation_scale() -> None:

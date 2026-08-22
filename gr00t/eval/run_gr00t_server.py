@@ -114,6 +114,12 @@ class ServerConfig:
     holoq_include_vit_patch_embed: bool = False
     """Include patch Conv3d lowered to the W4A4 GEMM backend"""
 
+    holoq_dit_activation_granularity: str = "static-per-step-per-channel"
+    """DiT activation calibration: static paper reference or native dynamic per-token"""
+
+    holoq_replay_output: str | None = None
+    """Atomically capture the first preprocessed model input for deterministic benchmarks"""
+
 
 def main(config: ServerConfig):
     config.embodiment_tag = EmbodimentTag.resolve(config.embodiment_tag)
@@ -147,6 +153,8 @@ def main(config: ServerConfig):
             holoq_scopes=config.holoq_scopes,
             holoq_include_vit_mergers=config.holoq_include_vit_mergers,
             holoq_include_vit_patch_embed=config.holoq_include_vit_patch_embed,
+            holoq_dit_activation_granularity=config.holoq_dit_activation_granularity,
+            holoq_replay_output=config.holoq_replay_output,
         )
         calibration_policy = policy
     elif config.dataset_path is not None:

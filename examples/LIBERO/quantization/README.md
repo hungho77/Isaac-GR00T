@@ -8,11 +8,13 @@ GR00T-N1.7 LIBERO checkpoints.
 
 - Suites and packs are independent: `object`, `spatial`, `goal`, and `long`
   (`libero_10`). Never reuse a pack across suites.
-- The released checkpoints use 16 selected language layers and 32 DiT blocks.
-  The strict scope is 112 LLM linears plus 192 DiT linears, or 304 total.
-- Vision, embeddings, state/action/timestep encoders, output projectors, and
-  `vl_self_attention` are not part of the paper-equivalent scope.
-- The optional `vit` extension covers Qwen3-VL block `qkv`, attention output,
+- The released checkpoints use 16 selected language layers, 32 DiT blocks, and
+  24 ViT blocks. The complete native scope is 112 LLM + 192 DiT + 104 ViT
+  linears, plus one lowered patch Conv3d: 408 linears / 409 weighted modules.
+- State/action/timestep encoders, output projectors, and `vl_self_attention`
+  remain outside this transformer scope. Norms and other non-weighted operators
+  remain BF16 by design rather than being silently routed through fake quantization.
+- The `vit` scope covers Qwen3-VL block `qkv`, attention output,
   MLP linears, merger/DeepStack merger linears, and optionally lowers the
   non-overlapping patch `Conv3d` to the same W4A4 GEMM core. Vision embeddings,
   norms, RoPE, QK/AV attention matmuls, and softmax remain high precision.
@@ -21,8 +23,9 @@ GR00T-N1.7 LIBERO checkpoints.
   randomized `SVD * Hadamard` rotation with block size 64.
 - LLM weights use GPTQ with block size 128 and damping 0.01. LLM activations
   use a dynamic per-token scale.
-- DiT weights use RTN. DiT activations use a q99.9 per-step, per-layer,
-  per-channel scale table.
+- DiT weights use RTN. The strict native workflow uses dynamic per-token DiT
+  activation scales. The q99.9 per-step/per-channel table remains available
+  only to the fake numerical-reference workflow.
 - N1.7 primary evaluation keeps the checkpoint's four Euler denoising steps.
   The paper's `T=8` is an ablation and requires separately calibrated packs.
 
@@ -35,18 +38,19 @@ Attach a Modal Volume at `/vol`, select an NVIDIA L4 kernel, set `SUITE`, and ru
 the phases in order by changing only `WORK_PHASE` and choosing **Run all**:
 
 ```text
-setup -> prepare -> calibrate -> build_pack -> smoke_rollout -> full_rollout -> package
+setup -> prepare -> calibrate -> build_pack -> smoke_rollout -> benchmark -> full_rollout -> package
 ```
 
 The notebook clones only `duc-quan`, resolves the selected Hugging Face
-checkpoint reference to an immutable commit SHA, evaluates BF16 and W4A4 with
-paired seeds, and atomically stores one 20-episode JSON shard per task. The
-`package` phase validates all 400 final-evaluation episodes for the selected
-suite (10 tasks x 20 episodes x 2 modes), writes an inventory plus SHA256
-checksums, and creates a suite-specific ZIP suitable for upload as a Kaggle
+checkpoint reference to an immutable commit SHA, evaluates BF16 and native W4A4
+with three paired seeds, and atomically stores one 20-episode JSON shard per
+task and seed. The `package` phase validates all 1,200 final-evaluation episodes
+for the selected suite (10 tasks x 20 episodes x 3 seeds x 2 modes), writes an inventory plus SHA256
+checksums, and packages the compact residual checkpoint together with its W4A4 pack
+in a suite-specific ZIP suitable for upload as a Kaggle
 Dataset. Run `status` at any time for a read-only progress report.
 
-## 1. Collect one FP16 calibration artifact per suite
+## 1. Collect one BF16 calibration artifact per suite
 
 Start the normal server without a quantization pack. Example for Object:
 
@@ -61,7 +65,7 @@ uv run python gr00t/eval/run_gr00t_server.py \
   --holoq-calibration-topk 512
 ```
 
-Against that server, roll out exactly ten unlabeled FP16 trajectories: one from
+Against that server, roll out exactly ten unlabeled BF16 trajectories: one from
 each task in the suite, using a fixed calibration initial state. Stop the server
 after all ten trajectories; shutdown writes the artifact. Repeat with the
 matching checkpoint and suite name for Spatial, Goal, and Long.
@@ -103,9 +107,9 @@ uv run python gr00t/eval/run_gr00t_server.py \
   --holoq-suite object
 ```
 
-Evaluate ten trials per task with initial states held out from calibration.
+Evaluate 20 trials per task for each of the three declared seeds, with initial states held out from calibration.
 Report every suite separately and the unweighted four-suite average. Run the
-same seeds for FP16 and W4A4, and retain action trajectories to check for spikes
+same seeds for BF16 and W4A4, and retain action trajectories to check for spikes
 or drift, especially on Long.
 
 ## Fake and native backends
@@ -113,8 +117,9 @@ or drift, especially on Long.
 Pack format v2 stores two signed INT4 values per byte and is shared by both
 backends. `--holoq-backend fake` unpacks and dequantizes as a numerical golden
 reference. `--holoq-backend native` invokes the bundled CUTLASS extension for
-signed INT4 x INT4 tensor-core GEMM with INT32 accumulation. Native mode never
-falls back to `F.linear`.
+fused CUDA activation quantization/packing, signed INT4 x INT4 tensor-core GEMM
+with INT32 accumulation, and fused CUDA scale/bias/output conversion. Native
+mode records per-module call coverage and never falls back to `F.linear`.
 
 Set `HOLOQ_CUTLASS_ROOT` to a CUTLASS checkout and precompile on the target GPU:
 
@@ -139,3 +144,11 @@ The original DiT q99.9 per-step/per-channel activation table remains available
 to the fake paper-reference path. It cannot be factored out of a single integer
 GEMM because its scale varies inside K; native mode therefore requires the
 explicit dynamic-per-token DiT variant and rejects incompatible packs.
+
+The benchmark phase captures one real preprocessed LIBERO input and runs BF16
+and native W4A4 in separate clean processes. It reports CUDA-event pure-model
+latency, RPC latency, allocated/reserved peak VRAM, physical compact-deployment
+storage, module/group/E2E cosine similarity, and strict native-call coverage.
+The compact checkpoint removes BF16 tensors owned by the W4A4 pack, so physical
+deployment size is measured as the complete residual checkpoint directory
+(excluding Hugging Face's download cache) plus the packed W4A4 artifact.

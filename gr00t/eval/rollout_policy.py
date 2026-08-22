@@ -17,6 +17,8 @@ from collections import defaultdict
 from contextlib import nullcontext
 from dataclasses import dataclass, field
 from functools import partial
+import json
+import os
 from pathlib import Path
 import sys
 import time
@@ -284,6 +286,7 @@ def _collect_rollout_episodes(
     n_episodes: int,
     n_envs: int,
     seed: int | None,
+    policy_latencies: list[float] | None = None,
 ):
     """Run the rollout loop and return ``(successes, lengths, rewards, infos)``.
 
@@ -312,7 +315,10 @@ def _collect_rollout_episodes(
     pbar = tqdm(total=n_episodes, desc="Episodes")
     try:
         while completed_episodes < n_episodes:
+            policy_started = time.perf_counter()
             actions, _ = policy.get_action(observations)
+            if policy_latencies is not None:
+                policy_latencies.append(time.perf_counter() - policy_started)
             next_obs, rewards, terminations, truncations, env_infos = env.step(actions)
             # NOTE (FY): Currently we don't properly handle policy reset. For now, our policy are stateless,
             # but in the future if we need policy to be stateful, we need to detect env reset and call policy.reset()
@@ -407,6 +413,7 @@ def run_rollout_gymnasium_policy(
     n_envs: int = 1,
     seed: int | None = None,
     robocasa_split: str = "",
+    policy_latencies: list[float] | None = None,
 ) -> Any:
     """Run policy rollouts in parallel environments.
 
@@ -454,7 +461,9 @@ def run_rollout_gymnasium_policy(
     # every exit path; a leaked child blocks the next eval shard's ports/GPUs.
     try:
         episode_successes, episode_lengths, episode_rewards, episode_infos = (
-            _collect_rollout_episodes(env, policy, n_episodes, n_envs, seed)
+            _collect_rollout_episodes(
+                env, policy, n_episodes, n_envs, seed, policy_latencies=policy_latencies
+            )
         )
     finally:
         # Don't let a teardown error mask an in-flight rollout exception.
@@ -549,6 +558,7 @@ def run_gr00t_sim_policy(
     trt_mode: InferenceMode = InferenceMode.n17_full_pipeline,
     seed: int | None = None,
     robocasa_split: str = "",
+    rpc_latency_output: str | None = None,
 ):
     # seed_everything resolves `None` via the GR00T_EVAL_SEED env var and is a
     # no-op when that is also unset, so the historical non-deterministic
@@ -608,6 +618,7 @@ def run_gr00t_sim_policy(
             ),
         )
 
+        policy_latencies: list[float] | None = [] if rpc_latency_output else None
         results = run_rollout_gymnasium_policy(
             env_name=env_name,
             policy=policy,
@@ -616,7 +627,26 @@ def run_gr00t_sim_policy(
             n_envs=n_envs,
             seed=seed,
             robocasa_split=robocasa_split,
+            policy_latencies=policy_latencies,
         )
+        if rpc_latency_output:
+            latency_path = Path(rpc_latency_output)
+            latency_path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = latency_path.with_suffix(latency_path.suffix + ".partial")
+            temporary.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "unit": "seconds",
+                        "samples": policy_latencies,
+                        "sample_count": len(policy_latencies or []),
+                    },
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            os.replace(temporary, latency_path)
         print("Video saved to: ", wrapper_configs.video.video_dir)
         return results
 

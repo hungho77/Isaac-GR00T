@@ -58,6 +58,7 @@ def main() -> None:
     parser.add_argument("--video-dir", required=True, type=Path)
     parser.add_argument("--source-revision", required=True)
     parser.add_argument("--checkpoint-revision", required=True)
+    parser.add_argument("--rpc-latency-output", type=Path, default=None)
     args = parser.parse_args()
 
     if args.n_episodes <= 0:
@@ -79,6 +80,9 @@ def main() -> None:
         n_action_steps=args.n_action_steps,
         video_dir=str(args.video_dir),
         seed=args.seed,
+        rpc_latency_output=(
+            None if args.rpc_latency_output is None else str(args.rpc_latency_output)
+        ),
     )
     elapsed_seconds = time.monotonic() - start_time
 

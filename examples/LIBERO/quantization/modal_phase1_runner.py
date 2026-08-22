@@ -16,6 +16,7 @@ from pathlib import Path
 import shutil
 import signal
 import socket
+import statistics
 import subprocess
 import tempfile
 import time
@@ -86,8 +87,21 @@ SOURCE_BRANCH = "duc-quan"
 EXPECTED_TASKS = 10
 EXPECTED_LLM_LINEARS = 112
 EXPECTED_DIT_LINEARS = 192
-EXPECTED_TOTAL_LINEARS = 304
+EXPECTED_VIT_LAYERS = 24
+EXPECTED_VIT_LINEARS = 104
+EXPECTED_VIT_PATCH_CONVS = 1
+EXPECTED_TOTAL_LINEARS = 408
+EXPECTED_TOTAL_MODULES = 409
 FULL_ROLLOUT_EPISODES_PER_TASK = 20
+DEFAULT_EVALUATION_SEEDS = (10000, 20000, 30000)
+REQUIRED_BENCHMARK_FILES = (
+    "inference_latency.json",
+    "end_to_end_latency.json",
+    "model_storage.json",
+    "vram_usage.json",
+    "cosine_similarity.json",
+    "native_backend.json",
+)
 
 
 @dataclass(frozen=True)
@@ -100,7 +114,7 @@ class Config:
     checkpoint_ref: str
     server_port: int
     calibration_seed: int
-    evaluation_seed_base: int
+    evaluation_seeds: tuple[int, ...]
     n_envs: int
     n_action_steps: int
     max_episode_steps: int
@@ -113,6 +127,8 @@ class Config:
     holoq_scopes: str
     holoq_include_vit_mergers: bool
     holoq_include_vit_patch_embed: bool
+    benchmark_warmup: int
+    benchmark_iterations: int
 
     @property
     def suite_root(self) -> Path:
@@ -137,6 +153,18 @@ class Config:
     @property
     def pack_path(self) -> Path:
         return self.suite_root / "packs" / f"{self.suite}-w4a4.pt"
+
+    @property
+    def cutlass_root(self) -> Path:
+        return self.artifact_root / "native_dependencies" / "cutlass-v3.9.2"
+
+    @property
+    def replay_path(self) -> Path:
+        return self.suite_root / "benchmarks" / "replay" / "model-input.pt"
+
+    @property
+    def compact_model_path(self) -> Path:
+        return self.artifact_root / "deployments" / self.suite / "native_checkpoint"
 
 
 def _utc_now() -> str:
@@ -186,6 +214,10 @@ def _git(cfg: Config, *arguments: str) -> str:
         capture_output=True,
     )
     return result.stdout.strip()
+
+
+def _git_at(path: Path, *arguments: str) -> str:
+    return _run(["git", "-C", str(path), *arguments], capture_output=True).stdout.strip()
 
 
 def _phase_marker(cfg: Config, phase: str, extra: dict[str, Any] | None = None) -> None:
@@ -240,7 +272,20 @@ def _validate_l4(cfg: Config) -> dict[str, Any]:
     }
 
 
+def _validate_native_multiseed_protocol(cfg: Config) -> None:
+    scopes = {item.strip() for item in cfg.holoq_scopes.split(",") if item.strip()}
+    if cfg.holoq_backend != "native":
+        raise RuntimeError("The new protocol requires --holoq-backend native")
+    if scopes != {"llm", "dit", "vit"}:
+        raise RuntimeError("The new protocol requires the exact scopes llm,dit,vit")
+    if not cfg.holoq_include_vit_mergers or not cfg.holoq_include_vit_patch_embed:
+        raise RuntimeError("The complete ViT protocol requires mergers and patch embedding")
+    if len(cfg.evaluation_seeds) != 3 or len(set(cfg.evaluation_seeds)) != 3:
+        raise RuntimeError("Exactly three distinct reproducible evaluation seeds are required")
+
+
 def _require_manifest(cfg: Config) -> dict[str, Any]:
+    _validate_native_multiseed_protocol(cfg)
     if not cfg.manifest_path.is_file():
         raise RuntimeError("Missing suite manifest. Run WORK_PHASE='prepare'.")
     manifest = _load_json(cfg.manifest_path)
@@ -251,7 +296,7 @@ def _require_manifest(cfg: Config) -> dict[str, Any]:
         raise RuntimeError("Manifest suite mismatch")
     current_protocol = {
         "calibration_seed": cfg.calibration_seed,
-        "evaluation_seed_base": cfg.evaluation_seed_base,
+        "evaluation_seeds": list(cfg.evaluation_seeds),
         "n_envs": cfg.n_envs,
         "n_action_steps": cfg.n_action_steps,
         "max_episode_steps": cfg.max_episode_steps,
@@ -260,6 +305,8 @@ def _require_manifest(cfg: Config) -> dict[str, Any]:
         "holoq_scopes": cfg.holoq_scopes,
         "holoq_include_vit_mergers": cfg.holoq_include_vit_mergers,
         "holoq_include_vit_patch_embed": cfg.holoq_include_vit_patch_embed,
+        "benchmark_warmup": cfg.benchmark_warmup,
+        "benchmark_iterations": cfg.benchmark_iterations,
         "evaluation_trials_per_task": FULL_ROLLOUT_EPISODES_PER_TASK,
     }
     mismatches = {
@@ -289,6 +336,7 @@ def _resolve_checkpoint_revision(cfg: Config) -> str:
 
 
 def phase_prepare(cfg: Config) -> None:
+    _validate_native_multiseed_protocol(cfg)
     source_revision = _validate_repo(cfg)
     _restore_libero_config(cfg)
     gpu_info = _validate_l4(cfg)
@@ -326,12 +374,30 @@ def phase_prepare(cfg: Config) -> None:
             f"{quant_config} sets evaluation_trials_per_task={configured_trials!r}; "
             f"expected protocol value {FULL_ROLLOUT_EPISODES_PER_TASK}"
         )
+    expected_quant_contract = {
+        "expected_llm_layers": 16,
+        "expected_dit_layers": 32,
+        "expected_vit_layers": EXPECTED_VIT_LAYERS,
+        "expected_vit_linears": EXPECTED_VIT_LINEARS,
+        "expected_vit_patch_convs": EXPECTED_VIT_PATCH_CONVS,
+        "expected_quantized_linears": EXPECTED_TOTAL_LINEARS,
+        "expected_quantized_modules": EXPECTED_TOTAL_MODULES,
+        "evaluation_seeds": list(cfg.evaluation_seeds),
+        "evaluation_trials_per_task_per_seed": FULL_ROLLOUT_EPISODES_PER_TASK,
+    }
+    drift = {
+        key: {"config": quant_config_payload.get(key), "expected": value}
+        for key, value in expected_quant_contract.items()
+        if quant_config_payload.get(key) != value
+    }
+    if drift:
+        raise RuntimeError(f"Quantization config is incompatible with native protocol: {drift}")
     config_copy = cfg.suite_root / "configs" / quant_config.name
     config_copy.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(quant_config, config_copy)
 
     manifest = {
-        "schema_version": 1,
+        "schema_version": 2,
         "suite": cfg.suite,
         "source_branch": SOURCE_BRANCH,
         "source_revision": source_revision,
@@ -344,9 +410,13 @@ def phase_prepare(cfg: Config) -> None:
         "denoising_steps": 4,
         "expected_llm_linears": EXPECTED_LLM_LINEARS,
         "expected_dit_linears": EXPECTED_DIT_LINEARS,
+        "expected_vit_layers": EXPECTED_VIT_LAYERS,
+        "expected_vit_linears": EXPECTED_VIT_LINEARS,
+        "expected_vit_patch_convs": EXPECTED_VIT_PATCH_CONVS,
         "expected_total_linears": EXPECTED_TOTAL_LINEARS,
+        "expected_total_modules": EXPECTED_TOTAL_MODULES,
         "calibration_seed": cfg.calibration_seed,
-        "evaluation_seed_base": cfg.evaluation_seed_base,
+        "evaluation_seeds": list(cfg.evaluation_seeds),
         "n_envs": cfg.n_envs,
         "n_action_steps": cfg.n_action_steps,
         "max_episode_steps": cfg.max_episode_steps,
@@ -355,7 +425,13 @@ def phase_prepare(cfg: Config) -> None:
         "holoq_scopes": cfg.holoq_scopes,
         "holoq_include_vit_mergers": cfg.holoq_include_vit_mergers,
         "holoq_include_vit_patch_embed": cfg.holoq_include_vit_patch_embed,
+        "benchmark_warmup": cfg.benchmark_warmup,
+        "benchmark_iterations": cfg.benchmark_iterations,
         "evaluation_trials_per_task": FULL_ROLLOUT_EPISODES_PER_TASK,
+        "evaluation_trials_per_task_per_seed": FULL_ROLLOUT_EPISODES_PER_TASK,
+        "evaluation_trials_per_mode": (
+            EXPECTED_TASKS * FULL_ROLLOUT_EPISODES_PER_TASK * len(cfg.evaluation_seeds)
+        ),
         "tasks": list(SUITE_TASKS[cfg.suite]),
         "gpu": gpu_info,
         "prepared_at_utc": _utc_now(),
@@ -400,6 +476,7 @@ def _policy_server(
     *,
     mode: str,
     calibration_output: Path | None = None,
+    replay_output: Path | None = None,
 ) -> Iterator[None]:
     if _port_is_open("127.0.0.1", cfg.server_port):
         raise RuntimeError(
@@ -410,11 +487,16 @@ def _policy_server(
     log_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     log_path = log_dir / f"server-{mode}-{timestamp}.log"
+    server_model_path = (
+        cfg.compact_model_path
+        if mode == "w4a4" and cfg.compact_model_path.is_dir()
+        else cfg.model_path
+    )
     command = [
         str(cfg.repo_path / ".venv" / "bin" / "python"),
         "gr00t/eval/run_gr00t_server.py",
         "--model-path",
-        str(cfg.model_path),
+        str(server_model_path),
         "--embodiment-tag",
         "LIBERO_PANDA",
         "--use-sim-policy-wrapper",
@@ -426,6 +508,11 @@ def _policy_server(
     if mode == "w4a4":
         if not cfg.pack_path.is_file():
             raise RuntimeError("Missing W4A4 pack. Run WORK_PHASE='build_pack'.")
+        if not cfg.compact_model_path.is_dir():
+            raise RuntimeError(
+                "Missing compact native checkpoint. Run WORK_PHASE='build_pack'; "
+                "the strict native protocol never falls back to the full BF16 checkpoint."
+            )
         command.extend(
             [
                 "--holoq-pack-path",
@@ -461,10 +548,15 @@ def _policy_server(
                     if cfg.holoq_include_vit_patch_embed
                     else "--no-holoq-include-vit-patch-embed"
                 ),
+                "--holoq-dit-activation-granularity",
+                "dynamic-per-token",
             ]
         )
     elif mode != "bf16":
         raise ValueError(f"Unsupported server mode: {mode}")
+    if replay_output is not None:
+        replay_output.unlink(missing_ok=True)
+        command.extend(["--holoq-replay-output", str(replay_output)])
 
     environment = os.environ.copy()
     environment.update(
@@ -473,6 +565,7 @@ def _policy_server(
             "PYOPENGL_PLATFORM": "egl",
             "PYTHONUNBUFFERED": "1",
             "HF_HUB_DISABLE_TELEMETRY": "1",
+            "HOLOQ_CUTLASS_ROOT": str(cfg.cutlass_root),
         }
     )
     print("+", " ".join(command))
@@ -552,6 +645,7 @@ def _run_shard(
     output_path: Path,
     video_dir: Path,
     n_envs: int | None = None,
+    rpc_latency_output: Path | None = None,
 ) -> None:
     manifest = _require_manifest(cfg)
     effective_n_envs = cfg.n_envs if n_envs is None else n_envs
@@ -612,6 +706,9 @@ def _run_shard(
         "--checkpoint-revision",
         manifest["checkpoint_revision"],
     ]
+    if rpc_latency_output is not None:
+        rpc_latency_output.unlink(missing_ok=True)
+        command.extend(["--rpc-latency-output", str(rpc_latency_output)])
     environment = os.environ.copy()
     environment.update(
         {
@@ -683,11 +780,14 @@ def phase_build_pack(cfg: Config) -> None:
     if not cfg.calibration_path.is_file():
         raise RuntimeError("Missing calibration artifact. Run WORK_PHASE='calibrate'.")
     if cfg.holoq_backend == "native":
+        cfg.cutlass_root.parent.mkdir(parents=True, exist_ok=True)
         _run(
             [
                 str(cfg.repo_path / ".venv" / "bin" / "python"),
                 "tools/build_holoq_native_extension.py",
                 "--fetch-cutlass",
+                "--cutlass-root",
+                str(cfg.cutlass_root),
             ],
             cwd=cfg.repo_path,
         )
@@ -744,11 +844,14 @@ def phase_build_pack(cfg: Config) -> None:
 
     validate_code = (
         "import json, torch; "
-        f"p=torch.load({str(cfg.pack_path)!r}, map_location='cpu', weights_only=False); "
+        f"p=torch.load({str(cfg.pack_path)!r}, map_location='cpu', weights_only=True); "
         "m=p['manifest']; "
         "print(json.dumps({'suite':m['suite'],'llm_linears':m['llm_linears'],"
-        "'dit_linears':m['dit_linears'],'vit_linears':m.get('vit_linears',0),"
+        "'dit_linears':m['dit_linears'],'vit_layers':m.get('vit_layers',0),"
+        "'vit_linears':m.get('vit_linears',0),"
         "'vit_patch_convs':m.get('vit_patch_convs',0),'total_linears':m['total_linears'],"
+        "'total_modules':m.get('total_quantized_modules',"
+        "m['total_linears']+m.get('vit_patch_convs',0)),"
         "'scopes':m.get('scopes',['llm','dit']),'runtime_compatible_backends':m.get('runtime_compatible_backends',['fake']),"
         "'num_inference_timesteps':m['num_inference_timesteps'],"
         "'source_revision':m['source_revision'],'checkpoint_revision':m['checkpoint_revision']}))"
@@ -764,6 +867,15 @@ def phase_build_pack(cfg: Config) -> None:
         "suite": cfg.suite,
         "llm_linears": EXPECTED_LLM_LINEARS if "llm" in selected_scopes else 0,
         "dit_linears": EXPECTED_DIT_LINEARS if "dit" in selected_scopes else 0,
+        "vit_layers": EXPECTED_VIT_LAYERS if "vit" in selected_scopes else 0,
+        "vit_linears": EXPECTED_VIT_LINEARS if "vit" in selected_scopes else 0,
+        "vit_patch_convs": (
+            EXPECTED_VIT_PATCH_CONVS
+            if "vit" in selected_scopes and cfg.holoq_include_vit_patch_embed
+            else 0
+        ),
+        "total_linears": EXPECTED_TOTAL_LINEARS,
+        "total_modules": EXPECTED_TOTAL_MODULES,
         "num_inference_timesteps": 4,
         "source_revision": manifest["source_revision"],
         "checkpoint_revision": manifest["checkpoint_revision"],
@@ -778,6 +890,30 @@ def phase_build_pack(cfg: Config) -> None:
         raise RuntimeError(f"Pack scopes {pack_manifest['scopes']} != {expected_scopes}")
     if cfg.holoq_backend not in pack_manifest["runtime_compatible_backends"]:
         raise RuntimeError(f"Pack is not compatible with requested backend {cfg.holoq_backend!r}")
+    if pack_manifest["runtime_compatible_backends"] != ["fake", "native"]:
+        raise RuntimeError("Native protocol pack unexpectedly allows a non-strict backend contract")
+    compact_manifest_path = cfg.compact_model_path / "holoq_native_deployment.json"
+    if compact_manifest_path.is_file():
+        compact_manifest = _load_json(compact_manifest_path)
+        if compact_manifest.get("pack_sha256") != pack_sha:
+            raise RuntimeError(
+                "Existing compact checkpoint belongs to another pack; use a clean artifact root"
+            )
+    else:
+        cfg.compact_model_path.parent.mkdir(parents=True, exist_ok=True)
+        _run(
+            [
+                str(cfg.repo_path / ".venv" / "bin" / "python"),
+                "tools/export_holoq_native_checkpoint.py",
+                "--source-model-path",
+                str(cfg.model_path),
+                "--pack-path",
+                str(cfg.pack_path),
+                "--output-path",
+                str(cfg.compact_model_path),
+            ],
+            cwd=cfg.repo_path,
+        )
     _atomic_json(
         cfg.suite_root / "packs" / "index.json",
         {"pack": str(cfg.pack_path), "sha256": pack_sha, "manifest": pack_manifest},
@@ -797,9 +933,16 @@ def _run_rollout_phase(cfg: Config, *, smoke: bool) -> None:
         phase_name = "smoke_rollout"
         result_root = cfg.suite_root / "smoke"
         video_root = cfg.suite_root / "videos" / "smoke"
+        seed_bases = (cfg.evaluation_seeds[0],)
     else:
         for mode in ROLLOUT_MODES:
-            smoke_path = cfg.suite_root / "smoke" / mode / f"task_{cfg.smoke_task_index:02d}.json"
+            smoke_path = (
+                cfg.suite_root
+                / "smoke"
+                / mode
+                / f"seed_{cfg.evaluation_seeds[0]}"
+                / f"task_{cfg.smoke_task_index:02d}.json"
+            )
             if not smoke_path.is_file():
                 raise RuntimeError("Missing smoke result. Run WORK_PHASE='smoke_rollout'.")
         task_indices = tuple(range(EXPECTED_TASKS))
@@ -807,25 +950,35 @@ def _run_rollout_phase(cfg: Config, *, smoke: bool) -> None:
         phase_name = "full_rollout"
         result_root = cfg.suite_root / "results"
         video_root = cfg.suite_root / "videos" / "full"
+        seed_bases = cfg.evaluation_seeds
 
     for mode in ROLLOUT_MODES:
         with _policy_server(cfg, mode=mode):
-            for task_index in task_indices:
-                seed = cfg.evaluation_seed_base + task_index * 100
-                _run_shard(
-                    cfg,
-                    mode=mode,
-                    task_index=task_index,
-                    n_episodes=n_episodes,
-                    seed=seed,
-                    output_path=result_root / mode / f"task_{task_index:02d}.json",
-                    video_dir=video_root / mode / f"task_{task_index:02d}",
-                    n_envs=1 if smoke else cfg.n_envs,
-                )
+            for seed_base in seed_bases:
+                for task_index in task_indices:
+                    effective_seed = seed_base + task_index * 100
+                    _run_shard(
+                        cfg,
+                        mode=mode,
+                        task_index=task_index,
+                        n_episodes=n_episodes,
+                        seed=effective_seed,
+                        output_path=(
+                            result_root / mode / f"seed_{seed_base}" / f"task_{task_index:02d}.json"
+                        ),
+                        video_dir=(
+                            video_root / mode / f"seed_{seed_base}" / f"task_{task_index:02d}"
+                        ),
+                        n_envs=1 if smoke else cfg.n_envs,
+                    )
 
     if not smoke:
         _write_metrics(cfg)
-    _phase_marker(cfg, phase_name, {"episodes_per_task": n_episodes})
+    _phase_marker(
+        cfg,
+        phase_name,
+        {"episodes_per_task_per_seed": n_episodes, "evaluation_seeds": list(seed_bases)},
+    )
     print(f"{phase_name} complete for suite={cfg.suite}")
 
 
@@ -837,65 +990,376 @@ def phase_full_rollout(cfg: Config) -> None:
     _run_rollout_phase(cfg, smoke=False)
 
 
-def _collect_mode_results(cfg: Config, mode: str) -> list[dict[str, Any]]:
+def _collect_mode_results(cfg: Config, mode: str) -> dict[int, list[dict[str, Any]]]:
     manifest = _require_manifest(cfg)
-    results = []
-    for task_index in range(EXPECTED_TASKS):
-        path = cfg.suite_root / "results" / mode / f"task_{task_index:02d}.json"
-        seed = cfg.evaluation_seed_base + task_index * 100
-        if not _result_is_complete(
-            path,
-            cfg=cfg,
-            manifest=manifest,
-            mode=mode,
-            task_index=task_index,
-            n_episodes=FULL_ROLLOUT_EPISODES_PER_TASK,
-            n_envs=cfg.n_envs,
-            seed=seed,
-        ):
-            raise RuntimeError(f"Incomplete final rollout shard: {path}")
-        results.append(_load_json(path))
+    results: dict[int, list[dict[str, Any]]] = {}
+    for seed_base in cfg.evaluation_seeds:
+        seed_results = []
+        for task_index in range(EXPECTED_TASKS):
+            path = (
+                cfg.suite_root
+                / "results"
+                / mode
+                / f"seed_{seed_base}"
+                / f"task_{task_index:02d}.json"
+            )
+            effective_seed = seed_base + task_index * 100
+            if not _result_is_complete(
+                path,
+                cfg=cfg,
+                manifest=manifest,
+                mode=mode,
+                task_index=task_index,
+                n_episodes=FULL_ROLLOUT_EPISODES_PER_TASK,
+                n_envs=cfg.n_envs,
+                seed=effective_seed,
+            ):
+                raise RuntimeError(f"Incomplete final rollout shard: {path}")
+            seed_results.append(_load_json(path))
+        results[seed_base] = seed_results
     return results
+
+
+def _mean_ci95(values: list[float]) -> dict[str, float]:
+    mean = statistics.fmean(values)
+    if len(values) < 2:
+        return {"mean": mean, "std": 0.0, "ci95_low": mean, "ci95_high": mean}
+    std = statistics.stdev(values)
+    critical = 4.302652729911275 if len(values) == 3 else 1.96
+    half_width = critical * std / (len(values) ** 0.5)
+    return {
+        "mean": mean,
+        "std": std,
+        "ci95_low": mean - half_width,
+        "ci95_high": mean + half_width,
+    }
 
 
 def _write_metrics(cfg: Config) -> dict[str, Any]:
     payload: dict[str, Any] = {
-        "schema_version": 1,
+        "schema_version": 2,
         "suite": cfg.suite,
+        "evaluation_seeds": list(cfg.evaluation_seeds),
+        "episodes_per_task_per_seed": FULL_ROLLOUT_EPISODES_PER_TASK,
         "generated_at_utc": _utc_now(),
         "modes": {},
     }
     for mode in ROLLOUT_MODES:
-        results = _collect_mode_results(cfg, mode)
-        task_metrics = []
+        results_by_seed = _collect_mode_results(cfg, mode)
+        seed_metrics = []
         total_successes = 0
         total_episodes = 0
-        for result in results:
-            successes = sum(bool(episode["success"]) for episode in result["episodes"])
-            episodes = len(result["episodes"])
-            total_successes += successes
-            total_episodes += episodes
+        task_totals = {index: {"successes": 0, "episodes": 0} for index in range(EXPECTED_TASKS)}
+        for seed_base, results in results_by_seed.items():
+            seed_successes = 0
+            seed_episodes = 0
+            for result in results:
+                successes = sum(bool(episode["success"]) for episode in result["episodes"])
+                episodes = len(result["episodes"])
+                seed_successes += successes
+                seed_episodes += episodes
+                task_totals[result["task_index"]]["successes"] += successes
+                task_totals[result["task_index"]]["episodes"] += episodes
+            total_successes += seed_successes
+            total_episodes += seed_episodes
+            seed_metrics.append(
+                {
+                    "seed": seed_base,
+                    "successes": seed_successes,
+                    "episodes": seed_episodes,
+                    "success_rate": seed_successes / seed_episodes,
+                }
+            )
+        task_metrics = []
+        for task_index, totals in task_totals.items():
             task_metrics.append(
                 {
-                    "task_index": result["task_index"],
-                    "env_name": result["env_name"],
-                    "successes": successes,
-                    "episodes": episodes,
-                    "success_rate": successes / episodes,
-                    "elapsed_seconds": result["elapsed_seconds"],
+                    "task_index": task_index,
+                    "env_name": SUITE_TASKS[cfg.suite][task_index],
+                    **totals,
+                    "success_rate": totals["successes"] / totals["episodes"],
                 }
             )
         payload["modes"][mode] = {
             "successes": total_successes,
             "episodes": total_episodes,
             "success_rate": total_successes / total_episodes,
+            "across_seed_success_rate": _mean_ci95([item["success_rate"] for item in seed_metrics]),
+            "seeds": seed_metrics,
             "tasks": task_metrics,
         }
     payload["w4a4_minus_bf16"] = (
         payload["modes"]["w4a4"]["success_rate"] - payload["modes"]["bf16"]["success_rate"]
     )
+    paired_seed_deltas = [
+        payload["modes"]["w4a4"]["seeds"][index]["success_rate"]
+        - payload["modes"]["bf16"]["seeds"][index]["success_rate"]
+        for index in range(len(cfg.evaluation_seeds))
+    ]
+    payload["paired_seed_delta"] = {
+        "values": paired_seed_deltas,
+        **_mean_ci95(paired_seed_deltas),
+    }
     _atomic_json(cfg.suite_root / "metrics" / "summary.json", payload)
     return payload
+
+
+def _latency_seconds_summary(samples: list[float], *, discard_first: int = 3) -> dict[str, Any]:
+    measured = samples[min(discard_first, max(0, len(samples) - 1)) :]
+    if not measured:
+        raise RuntimeError("RPC benchmark produced no warmed samples")
+    ordered = sorted(measured)
+
+    def percentile(value: float) -> float:
+        index = min(len(ordered) - 1, round((len(ordered) - 1) * value))
+        return ordered[index] * 1000.0
+
+    milliseconds = [value * 1000.0 for value in measured]
+    mean = statistics.fmean(milliseconds)
+    return {
+        "unit": "milliseconds",
+        "cold_samples_discarded": min(discard_first, max(0, len(samples) - 1)),
+        "sample_count": len(milliseconds),
+        "samples": milliseconds,
+        "mean": mean,
+        "median": statistics.median(milliseconds),
+        "minimum": min(milliseconds),
+        "maximum": max(milliseconds),
+        "p95": percentile(0.95),
+        "p99": percentile(0.99),
+        "throughput_rpc_calls_per_second": 1000.0 / mean,
+    }
+
+
+def phase_benchmark(cfg: Config) -> None:
+    manifest = _require_manifest(cfg)
+    _validate_l4(cfg)
+    if not cfg.pack_path.is_file() or not cfg.compact_model_path.is_dir():
+        raise RuntimeError("Native pack/compact checkpoint missing; run WORK_PHASE='build_pack'.")
+    smoke_seed = cfg.evaluation_seeds[0]
+    for mode in ROLLOUT_MODES:
+        smoke = (
+            cfg.suite_root
+            / "smoke"
+            / mode
+            / f"seed_{smoke_seed}"
+            / f"task_{cfg.smoke_task_index:02d}.json"
+        )
+        if not smoke.is_file():
+            raise RuntimeError("Missing native/BF16 smoke results; run WORK_PHASE='smoke_rollout'.")
+
+    benchmark_root = cfg.suite_root / "benchmarks"
+    raw_root = benchmark_root / "raw"
+    raw_root.mkdir(parents=True, exist_ok=True)
+    benchmark_contract = {
+        "schema_version": 1,
+        "source_revision": manifest["source_revision"],
+        "checkpoint_revision": manifest["checkpoint_revision"],
+        "pack_sha256": _sha256(cfg.pack_path),
+        "suite": cfg.suite,
+        "smoke_task_index": cfg.smoke_task_index,
+        "benchmark_seed": 424242,
+        "n_action_steps": cfg.n_action_steps,
+        "max_episode_steps": cfg.max_episode_steps,
+        "warmup_iterations": cfg.benchmark_warmup,
+        "measured_iterations": cfg.benchmark_iterations,
+    }
+    contract_path = benchmark_root / "protocol.json"
+    previous_contract = _load_json(contract_path) if contract_path.is_file() else None
+    if previous_contract != benchmark_contract:
+        stale_paths = [
+            cfg.replay_path,
+            *(raw_root / f"rpc-{mode}.json" for mode in ROLLOUT_MODES),
+            *(raw_root / f"rpc-rollout-{mode}.json" for mode in ROLLOUT_MODES),
+            *(raw_root / f"profile-{mode}.json" for mode in ("bf16", "native_w4a4")),
+            *(benchmark_root / name for name in REQUIRED_BENCHMARK_FILES),
+        ]
+        for path in stale_paths:
+            path.unlink(missing_ok=True)
+        _atomic_json(contract_path, benchmark_contract)
+        print("Benchmark contract changed; invalidated only stale benchmark files")
+    for mode in ROLLOUT_MODES:
+        rpc_path = raw_root / f"rpc-{mode}.json"
+        rollout_path = raw_root / f"rpc-rollout-{mode}.json"
+        if not rpc_path.is_file() or (mode == "bf16" and not cfg.replay_path.is_file()):
+            rollout_path.unlink(missing_ok=True)
+            with _policy_server(
+                cfg,
+                mode=mode,
+                replay_output=cfg.replay_path if mode == "bf16" else None,
+            ):
+                _run_shard(
+                    cfg,
+                    mode=mode,
+                    task_index=cfg.smoke_task_index,
+                    n_episodes=1,
+                    seed=smoke_seed + cfg.smoke_task_index * 100,
+                    output_path=rollout_path,
+                    video_dir=benchmark_root / "videos" / mode,
+                    n_envs=1,
+                    rpc_latency_output=rpc_path,
+                )
+        if not rpc_path.is_file():
+            raise RuntimeError(f"Missing RPC benchmark: {rpc_path}")
+    if not cfg.replay_path.is_file():
+        raise RuntimeError("BF16 server did not capture a benchmark replay input")
+
+    python = cfg.repo_path / ".venv" / "bin" / "python"
+    helper = "examples/LIBERO/quantization/benchmark_holoq.py"
+    environment = os.environ.copy()
+    environment["HOLOQ_CUTLASS_ROOT"] = str(cfg.cutlass_root)
+    profile_paths = {}
+    for mode in ("bf16", "native_w4a4"):
+        output = raw_root / f"profile-{mode}.json"
+        profile_paths[mode] = output
+        if not output.is_file():
+            _run(
+                [
+                    str(python),
+                    helper,
+                    "profile",
+                    "--suite",
+                    cfg.suite,
+                    "--mode",
+                    mode,
+                    "--model-path",
+                    str(cfg.model_path),
+                    "--native-model-path",
+                    str(cfg.compact_model_path),
+                    "--pack-path",
+                    str(cfg.pack_path),
+                    "--replay-path",
+                    str(cfg.replay_path),
+                    "--output-path",
+                    str(output),
+                    "--warmup",
+                    str(cfg.benchmark_warmup),
+                    "--iterations",
+                    str(cfg.benchmark_iterations),
+                ],
+                cwd=cfg.repo_path,
+                env=environment,
+            )
+    cosine_path = benchmark_root / "cosine_similarity.json"
+    if not cosine_path.is_file():
+        _run(
+            [
+                str(python),
+                helper,
+                "cosine",
+                "--suite",
+                cfg.suite,
+                "--model-path",
+                str(cfg.model_path),
+                "--native-model-path",
+                str(cfg.compact_model_path),
+                "--pack-path",
+                str(cfg.pack_path),
+                "--replay-path",
+                str(cfg.replay_path),
+                "--output-path",
+                str(cosine_path),
+            ],
+            cwd=cfg.repo_path,
+            env=environment,
+        )
+    storage_path = benchmark_root / "model_storage.json"
+    if not storage_path.is_file():
+        _run(
+            [
+                str(python),
+                helper,
+                "storage",
+                "--suite",
+                cfg.suite,
+                "--model-path",
+                str(cfg.model_path),
+                "--native-model-path",
+                str(cfg.compact_model_path),
+                "--pack-path",
+                str(cfg.pack_path),
+                "--output-path",
+                str(storage_path),
+            ],
+            cwd=cfg.repo_path,
+            env=environment,
+        )
+
+    profiles = {mode: _load_json(path) for mode, path in profile_paths.items()}
+    _atomic_json(
+        benchmark_root / "inference_latency.json",
+        {
+            "schema_version": 1,
+            "suite": cfg.suite,
+            "bf16": {
+                "cuda": profiles["bf16"]["pure_inference_cuda"],
+                "wall": profiles["bf16"]["pure_inference_wall"],
+            },
+            "native_w4a4": {
+                "cuda": profiles["native_w4a4"]["pure_inference_cuda"],
+                "wall": profiles["native_w4a4"]["pure_inference_wall"],
+            },
+            "speedup_cuda_mean": (
+                profiles["bf16"]["pure_inference_cuda"]["mean"]
+                / profiles["native_w4a4"]["pure_inference_cuda"]["mean"]
+            ),
+        },
+    )
+    _atomic_json(
+        benchmark_root / "vram_usage.json",
+        {
+            "schema_version": 1,
+            "suite": cfg.suite,
+            "bf16": profiles["bf16"]["vram"],
+            "native_w4a4": profiles["native_w4a4"]["vram"],
+            "live_model_storage": {
+                "bf16": profiles["bf16"]["live_model_storage"],
+                "native_w4a4": profiles["native_w4a4"]["live_model_storage"],
+            },
+            "after_load_allocated_reduction_fraction": 1.0
+            - profiles["native_w4a4"]["vram"]["after_load"]["allocated_bytes"]
+            / profiles["bf16"]["vram"]["after_load"]["allocated_bytes"],
+            "steady_allocated_reduction_fraction": 1.0
+            - profiles["native_w4a4"]["vram"]["inference"][
+                "steady_allocated_before_measurement_bytes"
+            ]
+            / profiles["bf16"]["vram"]["inference"]["steady_allocated_before_measurement_bytes"],
+        },
+    )
+    rpc_payload = {mode: _load_json(raw_root / f"rpc-{mode}.json") for mode in ROLLOUT_MODES}
+    bf16_rpc = _latency_seconds_summary(rpc_payload["bf16"]["samples"])
+    native_rpc = _latency_seconds_summary(rpc_payload["w4a4"]["samples"])
+    _atomic_json(
+        benchmark_root / "end_to_end_latency.json",
+        {
+            "schema_version": 1,
+            "suite": cfg.suite,
+            "bf16": bf16_rpc,
+            "native_w4a4": native_rpc,
+            "speedup_mean": bf16_rpc["mean"] / native_rpc["mean"],
+        },
+    )
+    pack_index = _load_json(cfg.suite_root / "packs" / "index.json")
+    compact_manifest = _load_json(cfg.compact_model_path / "holoq_native_deployment.json")
+    _atomic_json(
+        benchmark_root / "native_backend.json",
+        {
+            "schema_version": 1,
+            "suite": cfg.suite,
+            "backend": "cutlass-int4-tensorcore",
+            "cutlass_revision": _git_at(cfg.cutlass_root, "rev-parse", "HEAD"),
+            "pack_sha256": pack_index["sha256"],
+            "pack_manifest": pack_index["manifest"],
+            "compact_checkpoint": compact_manifest,
+            "coverage": profiles["native_w4a4"]["native_coverage"],
+            "silent_fallback": False,
+        },
+    )
+    for required in REQUIRED_BENCHMARK_FILES:
+        if not (benchmark_root / required).is_file():
+            raise RuntimeError(f"Required benchmark output is missing: {required}")
+    _phase_marker(cfg, "benchmark", {"benchmark_files": list(REQUIRED_BENCHMARK_FILES)})
+    print(f"Native W4A4 benchmark complete: {benchmark_root}")
 
 
 def phase_package(cfg: Config) -> None:
@@ -903,6 +1367,13 @@ def phase_package(cfg: Config) -> None:
     metrics = _write_metrics(cfg)
     if not cfg.calibration_path.is_file() or not cfg.pack_path.is_file():
         raise RuntimeError("Calibration or W4A4 pack is missing")
+    missing_benchmarks = [
+        name
+        for name in REQUIRED_BENCHMARK_FILES
+        if not (cfg.suite_root / "benchmarks" / name).is_file()
+    ]
+    if missing_benchmarks:
+        raise RuntimeError(f"Missing benchmark outputs before package: {missing_benchmarks}")
 
     selected: list[tuple[Path, str]] = []
     for path in sorted(cfg.suite_root.rglob("*")):
@@ -914,6 +1385,12 @@ def phase_package(cfg: Config) -> None:
         if not cfg.package_include_videos and relative.parts and relative.parts[0] == "videos":
             continue
         selected.append((path, f"{cfg.suite}/{relative.as_posix()}"))
+    for path in sorted(cfg.compact_model_path.rglob("*")):
+        if path.is_file():
+            relative = path.relative_to(cfg.compact_model_path)
+            selected.append(
+                (path, f"{cfg.suite}/native_deployment/checkpoint/{relative.as_posix()}")
+            )
 
     inventory = []
     for path, archive_name in selected:
@@ -925,12 +1402,18 @@ def phase_package(cfg: Config) -> None:
             }
         )
     handoff = {
-        "schema_version": 1,
+        "schema_version": 2,
         "suite": cfg.suite,
         "source_revision": manifest["source_revision"],
         "checkpoint_revision": manifest["checkpoint_revision"],
         "bf16_episodes": metrics["modes"]["bf16"]["episodes"],
         "w4a4_episodes": metrics["modes"]["w4a4"]["episodes"],
+        "evaluation_seeds": list(cfg.evaluation_seeds),
+        "episodes_per_task_per_seed": FULL_ROLLOUT_EPISODES_PER_TASK,
+        "quantization_backend": "native",
+        "quantization_scopes": ["llm", "dit", "vit"],
+        "includes_compact_native_checkpoint": True,
+        "benchmark_files": list(REQUIRED_BENCHMARK_FILES),
         "package_includes_videos": cfg.package_include_videos,
         "file_count": len(inventory),
         "total_size_bytes": sum(item["size_bytes"] for item in inventory),
@@ -942,7 +1425,7 @@ def phase_package(cfg: Config) -> None:
     export_dir = cfg.artifact_root / "exports"
     export_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    final_zip = export_dir / f"gr00t-n17-holoq-{cfg.suite}-{timestamp}.zip"
+    final_zip = export_dir / f"gr00t-n17-native-w4a4-{cfg.suite}-{timestamp}.zip"
     with tempfile.TemporaryDirectory(dir=export_dir) as temp_dir:
         temporary_zip = Path(temp_dir) / final_zip.name
         with zipfile.ZipFile(temporary_zip, "w", allowZip64=True) as archive:
@@ -990,16 +1473,28 @@ def phase_status(cfg: Config) -> None:
         "model_path_exists": cfg.model_path.is_dir(),
         "calibration_exists": cfg.calibration_path.is_file(),
         "pack_exists": cfg.pack_path.is_file(),
+        "compact_native_checkpoint_exists": cfg.compact_model_path.is_dir(),
+        "expected_final_shards_per_mode": EXPECTED_TASKS * len(cfg.evaluation_seeds),
         "phases": {},
         "result_shards": {},
     }
-    for phase in ("prepare", "calibrate", "build_pack", "smoke_rollout", "full_rollout", "package"):
+    for phase in (
+        "prepare",
+        "calibrate",
+        "build_pack",
+        "smoke_rollout",
+        "benchmark",
+        "full_rollout",
+        "package",
+    ):
         marker = cfg.suite_root / "phase_state" / f"{phase}.json"
         payload["phases"][phase] = _load_json(marker) if marker.is_file() else None
     for mode in ROLLOUT_MODES:
-        payload["result_shards"][mode] = len(
-            list((cfg.suite_root / "results" / mode).glob("*.json"))
-        )
+        count = len(list((cfg.suite_root / "results" / mode).glob("seed_*/*.json")))
+        payload["result_shards"][mode] = {
+            "found": count,
+            "expected": EXPECTED_TASKS * len(cfg.evaluation_seeds),
+        }
     print(json.dumps(payload, indent=2, ensure_ascii=False))
 
 
@@ -1008,6 +1503,7 @@ PHASES = {
     "calibrate": phase_calibrate,
     "build_pack": phase_build_pack,
     "smoke_rollout": phase_smoke_rollout,
+    "benchmark": phase_benchmark,
     "full_rollout": phase_full_rollout,
     "package": phase_package,
     "status": phase_status,
@@ -1024,7 +1520,10 @@ def _parse_args() -> Config:
     parser.add_argument("--checkpoint-ref", default="")
     parser.add_argument("--server-port", default=5555, type=int)
     parser.add_argument("--calibration-seed", default=0, type=int)
-    parser.add_argument("--evaluation-seed-base", default=10000, type=int)
+    parser.add_argument(
+        "--evaluation-seeds",
+        default=",".join(str(value) for value in DEFAULT_EVALUATION_SEEDS),
+    )
     parser.add_argument("--n-envs", default=1, type=int)
     parser.add_argument("--n-action-steps", default=8, type=int)
     parser.add_argument("--max-episode-steps", default=720, type=int)
@@ -1035,17 +1534,25 @@ def _parse_args() -> Config:
         "--package-include-videos", action=argparse.BooleanOptionalAction, default=False
     )
     parser.add_argument("--require-l4", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--holoq-backend", choices=("fake", "native"), default="fake")
-    parser.add_argument("--holoq-scopes", default="llm,dit")
+    parser.add_argument("--holoq-backend", choices=("fake", "native"), default="native")
+    parser.add_argument("--holoq-scopes", default="llm,dit,vit")
     parser.add_argument(
         "--holoq-include-vit-mergers", action=argparse.BooleanOptionalAction, default=True
     )
     parser.add_argument(
         "--holoq-include-vit-patch-embed",
         action=argparse.BooleanOptionalAction,
-        default=False,
+        default=True,
     )
+    parser.add_argument("--benchmark-warmup", default=5, type=int)
+    parser.add_argument("--benchmark-iterations", default=20, type=int)
     args = parser.parse_args()
+    try:
+        args.evaluation_seeds = tuple(
+            int(value.strip()) for value in args.evaluation_seeds.split(",") if value.strip()
+        )
+    except ValueError as exc:
+        parser.error(f"--evaluation-seeds must be comma-separated integers: {exc}")
     if not 0 <= args.smoke_task_index < EXPECTED_TASKS:
         parser.error(f"--smoke-task-index must be in [0, {EXPECTED_TASKS - 1}]")
     if args.n_envs <= 0:
@@ -1055,6 +1562,9 @@ def _parse_args() -> Config:
             "--n-envs must divide the "
             f"{FULL_ROLLOUT_EPISODES_PER_TASK} final-evaluation episodes per task"
         )
+    if args.benchmark_warmup < 1 or args.benchmark_iterations < 1:
+        parser.error("benchmark warmup and iterations must be positive")
+    _validate_native_multiseed_protocol(Config(**vars(args)))
     return Config(**vars(args))
 
 

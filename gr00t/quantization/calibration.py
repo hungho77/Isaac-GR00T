@@ -27,11 +27,11 @@ CALIBRATION_FORMAT_VERSION = 2
 
 
 class HoloQCalibrationCollector:
-    """Collect block Hessians for LLM/ViT GPTQ and q99.9 tables for DiT RTN.
+    """Collect block Hessians for LLM/ViT GPTQ and DiT RTN metadata.
 
-    DiT percentiles use a streaming per-channel top-k order statistic. This is
-    exact while the q99.9 rank-from-the-top is no larger than ``topk``; finalizing
-    fails rather than silently approximating if more storage is required.
+    The fake-reference DiT path uses a streaming per-channel top-k percentile
+    statistic. The native path records per-step coverage and quantizes activations
+    dynamically per token, avoiding a non-factorable per-channel scale inside K.
     """
 
     def __init__(
@@ -48,6 +48,7 @@ class HoloQCalibrationCollector:
         scopes: str | tuple[str, ...] | list[str] | None = None,
         include_vit_mergers: bool = True,
         include_vit_patch_embed: bool = False,
+        dit_activation_granularity: str = "static-per-step-per-channel",
     ) -> None:
         if suite not in {"object", "spatial", "goal", "long"}:
             raise ValueError(f"Unsupported LIBERO suite {suite!r}")
@@ -57,6 +58,11 @@ class HoloQCalibrationCollector:
             raise ValueError(f"percentile must be in (0, 100), got {percentile}")
         if topk <= 0:
             raise ValueError(f"topk must be positive, got {topk}")
+        if dit_activation_granularity not in {
+            "static-per-step-per-channel",
+            "dynamic-per-token",
+        }:
+            raise ValueError("Unsupported DiT activation granularity")
 
         self.model = model
         self.suite = suite
@@ -69,6 +75,7 @@ class HoloQCalibrationCollector:
         self.scopes = normalize_scopes(scopes)
         self.include_vit_mergers = include_vit_mergers
         self.include_vit_patch_embed = include_vit_patch_embed
+        self.dit_activation_granularity = dit_activation_granularity
         self.num_steps = int(model.action_head.num_inference_timesteps)
         self.targets = discover_n1d7_targets(
             model,
@@ -80,6 +87,7 @@ class HoloQCalibrationCollector:
             self.targets,
             expected_llm_layers=16 if "llm" in self.scopes else None,
             expected_dit_layers=32 if "dit" in self.scopes else None,
+            expected_vit_layers=24 if "vit" in self.scopes else None,
             scopes=self.scopes,
         )
         self._transforms: dict[str, tuple[torch.Tensor, torch.Tensor] | None] = {}
@@ -109,7 +117,8 @@ class HoloQCalibrationCollector:
                     rotations.to(target.module.weight.device, dtype=torch.float16),
                 )
             if target.scope == "dit":
-                self._dit_topk[target.name] = [None] * self.num_steps
+                if self.dit_activation_granularity == "static-per-step-per-channel":
+                    self._dit_topk[target.name] = [None] * self.num_steps
                 self._dit_rows[target.name] = [0] * self.num_steps
             self._handles.append(target.module.register_forward_pre_hook(self._hook(target)))
 
@@ -159,6 +168,9 @@ class HoloQCalibrationCollector:
             raise RuntimeError(
                 f"{name}: collector expects {self.num_steps} steps, runtime uses {total_steps}"
             )
+        self._dit_rows[name][step] += rows.shape[0]
+        if self.dit_activation_granularity == "dynamic-per-token":
+            return
         values = rows.abs()
         keep = min(self.topk, values.shape[0])
         candidate = torch.topk(values, k=keep, dim=0, sorted=False).values.half()
@@ -170,7 +182,6 @@ class HoloQCalibrationCollector:
                 candidate.float(), k=self.topk, dim=0, sorted=False
             ).values.half()
         self._dit_topk[name][step] = candidate
-        self._dit_rows[name][step] += rows.shape[0]
 
     def _remove_hooks(self) -> None:
         for handle in self._handles:
@@ -216,6 +227,16 @@ class HoloQCalibrationCollector:
                 record["sample_rows"] = count
                 record["hessian_blocks"] = (self._llm_hessian[target.name] / count).float().cpu()
             else:
+                if self.dit_activation_granularity == "dynamic-per-token":
+                    counts = self._dit_rows[target.name]
+                    if any(count == 0 for count in counts):
+                        raise RuntimeError(
+                            f"No DiT activations collected for {target.name} at one or more steps"
+                        )
+                    record["sample_rows_per_step"] = counts
+                    record["activation_scale"] = None
+                    layers[target.name] = record
+                    continue
                 scales = []
                 for step in range(self.num_steps):
                     count = self._dit_rows[target.name][step]
@@ -248,6 +269,7 @@ class HoloQCalibrationCollector:
                 "scopes": list(self.scopes),
                 "include_vit_mergers": self.include_vit_mergers,
                 "include_vit_patch_embed": self.include_vit_patch_embed,
+                "dit_activation_granularity": self.dit_activation_granularity,
                 "llm_layers": self.summary.llm_layers,
                 "dit_layers": self.summary.dit_layers,
                 "vit_layers": self.summary.vit_layers,
