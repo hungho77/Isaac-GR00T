@@ -45,6 +45,8 @@ dependencies = [
     "pyzmq==27.0.1",
     # deepspeed publishes wheels only for x86_64 Linux.
     "deepspeed==0.17.6; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    # Native HoloQ compiles a strict CUDA/CUTLASS extension at first use.
+    "ninja==1.13.0; sys_platform == 'linux' and platform_machine == 'x86_64'",
     # triton is needed on aarch64 (GB200) but ships with torch on x86_64
     "triton==3.5.0; sys_platform == 'linux' and platform_machine == 'aarch64'",
     # flash-attn wheels are sourced from `[tool.uv.sources]` below (official cp312 wheels for x86_64 and aarch64).

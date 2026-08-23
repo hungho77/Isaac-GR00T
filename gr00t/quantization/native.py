@@ -22,6 +22,16 @@ import torch
 _EXTENSION: ModuleType | None = None
 
 
+def _cuda_dependency_include_paths() -> list[Path]:
+    """Find CUDA development headers shipped by PyTorch's NVIDIA wheels."""
+
+    torch_file = getattr(torch, "__file__", None)
+    if not torch_file:
+        return []
+    nvidia_root = Path(torch_file).resolve().parent.parent / "nvidia"
+    return sorted(path.resolve() for path in nvidia_root.glob("*/include") if path.is_dir())
+
+
 def _cutlass_root(explicit: str | Path | None = None) -> Path:
     candidates = [
         explicit,
@@ -58,11 +68,18 @@ def load_native_extension(*, cutlass_root: str | Path | None = None) -> ModuleTy
         raise RuntimeError(f"Native HoloQ extension sources are missing: {missing}")
     from torch.utils.cpp_extension import load
 
+    cuda_dependency_includes = _cuda_dependency_include_paths()
     identity = hashlib.sha256(
         (
             str(root)
             + "\0"
             + hashlib.sha256((root / "include" / "cutlass" / "cutlass.h").read_bytes()).hexdigest()
+            + "\0"
+            + str(torch.__version__)
+            + "\0"
+            + str(torch.version.cuda)
+            + "\0"
+            + "\0".join(str(path) for path in cuda_dependency_includes)
             + "\0"
             + "\0".join(path.read_text(encoding="utf-8") for path in sources)
         ).encode()
@@ -70,7 +87,11 @@ def load_native_extension(*, cutlass_root: str | Path | None = None) -> ModuleTy
     _EXTENSION = load(
         name=f"holoq_cutlass_{identity}",
         sources=[str(path) for path in sources],
-        extra_include_paths=[str(root / "include"), str(root / "tools" / "util" / "include")],
+        extra_include_paths=[
+            str(root / "include"),
+            str(root / "tools" / "util" / "include"),
+            *(str(path) for path in cuda_dependency_includes),
+        ],
         extra_cflags=["-O3"],
         extra_cuda_cflags=["-O3", "-lineinfo"],
         with_cuda=True,

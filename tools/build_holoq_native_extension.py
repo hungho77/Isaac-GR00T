@@ -91,7 +91,9 @@ def main() -> None:
     activation_packed, _ = pack_signed_int4(activation, pad_to=64)
     weight_packed, _ = pack_signed_int4(weight, pad_to=64)
     actual = extension.int4_mm(activation_packed, weight_packed, 128)
-    expected = activation.int() @ weight.int().T
+    # CUDA does not implement int32 addmm.  The tiny exact reference belongs on
+    # CPU; only the CUTLASS result under test executes on CUDA.
+    expected = (activation.cpu().int() @ weight.cpu().int().T).to(actual.device)
     torch.testing.assert_close(actual, expected, rtol=0, atol=0)
     floating = torch.randn((37, 113), dtype=torch.bfloat16, device="cuda", generator=generator)
     packed, scales = extension.quantize_pack(floating, 128)
