@@ -100,6 +100,8 @@ class ServerConfig:
     """Identifier for the exact ten-trajectory calibration rollout set"""
 
     holoq_calibration_topk: int = 512
+    holoq_rotation_mode: str = "svd_hadamard"
+    """Blockwise rotation for calibration: svd_hadamard (HoloQ-style) or svd (DuQuant-style)."""
     """Per-channel order-statistic capacity used to estimate q99.9"""
 
     holoq_backend: str = "fake"
@@ -149,6 +151,7 @@ def main(config: ServerConfig):
             holoq_suite=config.holoq_suite,
             holoq_calibration_run_id=config.holoq_calibration_run_id,
             holoq_calibration_topk=config.holoq_calibration_topk,
+            holoq_rotation_mode=config.holoq_rotation_mode,
             holoq_backend=config.holoq_backend,
             holoq_scopes=config.holoq_scopes,
             holoq_include_vit_mergers=config.holoq_include_vit_mergers,

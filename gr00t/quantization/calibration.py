@@ -41,6 +41,7 @@ class HoloQCalibrationCollector:
         suite: str,
         run_id: str,
         rotation_block_size: int = 64,
+        rotation_mode: str = "svd_hadamard",
         gptq_block_size: int = 128,
         percentile: float = 99.9,
         topk: int = 512,
@@ -68,6 +69,7 @@ class HoloQCalibrationCollector:
         self.suite = suite
         self.run_id = run_id
         self.rotation_block_size = rotation_block_size
+        self.rotation_mode = rotation_mode
         self.gptq_block_size = gptq_block_size
         self.percentile = percentile
         self.topk = topk
@@ -111,6 +113,7 @@ class HoloQCalibrationCollector:
                     target.module.weight,
                     block_size=rotation_block_size,
                     seed=layer_seed,
+                    rotation_mode=rotation_mode,
                 )
                 self._transforms[target.name] = (
                     permutation.to(target.module.weight.device),
@@ -210,7 +213,7 @@ class HoloQCalibrationCollector:
                 record["rotation_blocks"] = None
             else:
                 permutation, rotations = transform
-                record["transform"] = "svd-hadamard"
+                record["transform"] = "svd-hadamard" if self.rotation_mode == "svd_hadamard" else "svd"
                 record["permutation"] = permutation.cpu()
                 record["rotation_blocks"] = rotations.half().cpu()
             if target.module_kind == "conv3d_patch":
@@ -277,7 +280,12 @@ class HoloQCalibrationCollector:
                 "dit_linears": self.summary.dit_linears,
                 "vit_linears": self.summary.vit_linears,
                 "vit_patch_convs": self.summary.vit_patch_convs,
-                "rotation": "blockwise-svd-randomized-hadamard",
+                "rotation": (
+                    "blockwise-svd-randomized-hadamard"
+                    if self.rotation_mode == "svd_hadamard"
+                    else "blockwise-svd"
+                ),
+                "rotation_mode": self.rotation_mode,
                 "rotation_block_size": self.rotation_block_size,
                 "permutation": "zigzag-weight-norm",
                 "gptq_block_size": self.gptq_block_size,

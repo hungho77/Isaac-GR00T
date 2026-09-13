@@ -109,13 +109,21 @@ def zigzag_weight_permutation(weight: torch.Tensor, block_size: int) -> torch.Te
     return torch.tensor([channel for bucket in buckets for channel in bucket], dtype=torch.long)
 
 
+ROTATION_MODES = ("svd_hadamard", "svd")
+
+
 def build_svd_hadamard_transform(
     weight: torch.Tensor,
     *,
     block_size: int = 64,
     seed: int = 0,
+    rotation_mode: str = "svd_hadamard",
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Build zigzag permutation, randomized SVD-Hadamard blocks, and rotated weight.
+    """Build zigzag permutation, blockwise rotation, and rotated weight.
+
+    ``rotation_mode="svd_hadamard"`` (HoloQ-style) multiplies each block's left
+    singular vectors by a sign-randomised Hadamard; ``"svd"`` (DuQuant-style,
+    Omega-QVLA ``rot_mode=svd``) keeps the singular vectors alone.
 
     PyTorch stores a linear weight as ``[out, in]``. For row-vector inputs the
     invariant transform is ``X' = X[:, perm] R`` and
@@ -124,6 +132,8 @@ def build_svd_hadamard_transform(
 
     if block_size <= 0 or block_size & (block_size - 1):
         raise ValueError(f"block_size must be a positive power of two, got {block_size}")
+    if rotation_mode not in ROTATION_MODES:
+        raise ValueError(f"rotation_mode must be one of {ROTATION_MODES}, got {rotation_mode!r}")
     weight_fp = weight.detach().to(dtype=torch.float32)
     permutation = zigzag_weight_permutation(weight_fp, block_size).to(weight_fp.device)
     permuted = weight_fp.index_select(1, permutation)
@@ -148,7 +158,7 @@ def build_svd_hadamard_transform(
         ).float()
         signs = signs.mul_(2).sub_(1)
         randomized_hadamard = signs[:, None] * hadamard
-        rotation = u @ randomized_hadamard
+        rotation = u if rotation_mode == "svd" else u @ randomized_hadamard
         rotations.append(rotation)
         rotated_blocks.append(block @ rotation)
 

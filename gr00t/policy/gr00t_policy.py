@@ -116,6 +116,7 @@ class Gr00tPolicy(BasePolicy):
         holoq_suite: str | None = None,
         holoq_calibration_run_id: str | None = None,
         holoq_calibration_topk: int = 512,
+        holoq_rotation_mode: str = "svd_hadamard",
         holoq_backend: str = "fake",
         holoq_scopes: str = "llm,dit",
         holoq_include_vit_mergers: bool = True,
@@ -137,6 +138,8 @@ class Gr00tPolicy(BasePolicy):
             holoq_suite: LIBERO suite associated with calibration/pack use.
             holoq_calibration_run_id: Identifier for the exact rollout set.
             holoq_calibration_topk: Streaming q99.9 order-statistic capacity.
+            holoq_rotation_mode: ``svd_hadamard`` (HoloQ-style, default) or ``svd``
+                (DuQuant-style block rotation without the Hadamard factor).
             holoq_backend: ``fake`` reference or strict CUTLASS ``native`` execution.
             holoq_scopes: Comma-separated calibration scopes (llm, dit, vit).
         """
@@ -218,6 +221,7 @@ class Gr00tPolicy(BasePolicy):
                 suite=holoq_suite,
                 run_id=holoq_calibration_run_id,
                 topk=holoq_calibration_topk,
+                rotation_mode=holoq_rotation_mode,
                 scopes=holoq_scopes,
                 include_vit_mergers=holoq_include_vit_mergers,
                 include_vit_patch_embed=holoq_include_vit_patch_embed,
