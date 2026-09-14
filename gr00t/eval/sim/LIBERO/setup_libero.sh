@@ -55,26 +55,10 @@ PY
 grep -v "robomimic" "$PATCHED_REQUIREMENTS" > "$LIBERO_UV_ENV/requirements-py312-no-robomimic.txt"
 uv pip install --requirements "$LIBERO_UV_ENV/requirements-py312-no-robomimic.txt"
 uv pip install "robomimic==0.2.0" --no-deps
-# --no-deps also skips robomimic's runtime deps; robosuite imports termcolor at import time.
-uv pip install termcolor h5py psutil imageio imageio-ffmpeg
 uv pip install -e $LIBERO_REPO --config-settings editable_mode=compat
 # py3.12 pins: stop the resolver backtracking numba/llvmlite to the 3.10-only build
 uv pip install torch==2.9.0 torchvision==0.24.0 pydantic av tianshou==0.5.1 numba==0.65.1 llvmlite==0.47.0 tyro pandas dm_tree einops==0.8.1 albumentations==1.4.18 zmq
 uv pip install transformers==4.57.3 msgpack==1.1.0 msgpack-numpy==0.4.8 gymnasium==0.29.1
-# torch/numba/albumentations above drift numpy to 2.x; LIBERO/robosuite 1.4 need 1.26.
-uv pip install numpy==1.26.4
-# robosuite opens a FileHandler on the literal path /tmp/robosuite.log at import (macros.py
-# FILE_LOGGING_LEVEL="DEBUG"); on a shared host that file may belong to another user and
-# every import dies. None skips the handler; robosuite's own setup_macros.py is the
-# alternative if a private macro file is preferred.
-python - <<'PY'
-import pathlib, robosuite
-macros = pathlib.Path(robosuite.__file__).with_name("macros.py")
-text = macros.read_text()
-if 'FILE_LOGGING_LEVEL = "DEBUG"' in text:
-    macros.write_text(text.replace('FILE_LOGGING_LEVEL = "DEBUG"', "FILE_LOGGING_LEVEL = None  # patched: /tmp/robosuite.log is shared-host hostile"))
-    print("patched", macros)
-PY
 # Pin mujoco: robosuite 1.4.0 (pulled by LIBERO's requirements) calls
 # mj_fullM(model, dst, M), whose signature changed in mujoco 3.10.0 (2026-06-22)
 # to mj_fullM(model, data, dst). mujoco is otherwise unpinned here, so it floats
@@ -96,6 +80,17 @@ print(Path(next(iter(spec.submodule_search_locations))).resolve())
 PY
 )"
 python "$SCRIPT_DIR/configure_robosuite.py" "$ROBOSUITE_PACKAGE_DIR"
+# robosuite opens a FileHandler on the literal path /tmp/robosuite.log at import
+# (FILE_LOGGING_LEVEL="DEBUG"); on a shared host that file can belong to another user and
+# every import dies. Disable it in the private macros file configure_robosuite.py just created.
+python - <<PY
+from pathlib import Path
+private = Path("$ROBOSUITE_PACKAGE_DIR") / "macros_private.py"
+text = private.read_text()
+if 'FILE_LOGGING_LEVEL = "DEBUG"' in text:
+    private.write_text(text.replace('FILE_LOGGING_LEVEL = "DEBUG"', "FILE_LOGGING_LEVEL = None  # /tmp/robosuite.log is unusable on shared hosts"))
+    print("robosuite file logging disabled in", private)
+PY
 
 # Expose gr00t from the repo root via a .pth: no dependency re-resolution, and
 # the island supplies gr00t's runtime deps itself (matches the old --no-deps).
