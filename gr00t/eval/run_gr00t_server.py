@@ -100,9 +100,10 @@ class ServerConfig:
     """Identifier for the exact ten-trajectory calibration rollout set"""
 
     holoq_calibration_topk: int = 512
+    """Per-channel order-statistic capacity used to estimate q99.9"""
+
     holoq_rotation_mode: str = "svd_hadamard"
     """Blockwise rotation for calibration: svd_hadamard (HoloQ-style) or svd (DuQuant-style)."""
-    """Per-channel order-statistic capacity used to estimate q99.9"""
 
     holoq_backend: str = "fake"
     """W4A4 runtime: fake reference or strict native CUTLASS INT4"""
