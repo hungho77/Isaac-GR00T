@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import signal
 import socket
 import subprocess
 import sys
@@ -70,6 +71,15 @@ def _start_server(args, extra: list[str], log_path: Path) -> subprocess.Popen:
 
 
 def _stop_server(process: subprocess.Popen) -> None:
+    # The server writes the calibration artifact in the ``finally`` that follows its
+    # ``except KeyboardInterrupt`` — i.e. it flushes on SIGINT.  SIGTERM (``terminate``)
+    # kills the interpreter before that block runs and no artifact is written.
+    process.send_signal(signal.SIGINT)
+    try:
+        process.wait(timeout=300)
+        return
+    except subprocess.TimeoutExpired:
+        pass
     process.terminate()
     try:
         process.wait(timeout=120)
