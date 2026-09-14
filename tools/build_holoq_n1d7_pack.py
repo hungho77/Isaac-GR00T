@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import argparse
 
+import torch
+
 from gr00t.quantization.builder import build_holoq_pack
 from transformers import AutoModel
 
@@ -40,7 +42,10 @@ def main() -> None:
 
     import gr00t.model  # noqa: F401
 
-    model = AutoModel.from_pretrained(args.model_path).eval()
+    # Load exactly as Gr00tPolicy does (bfloat16): the calibration artifact records
+    # model_config_sha256 of the served model, and ``dtype`` is part of that config,
+    # so a default float32 load can never match the artifact.
+    model = AutoModel.from_pretrained(args.model_path, dtype=torch.bfloat16).eval()
     output = build_holoq_pack(
         model,
         calibration_path=args.calibration_path,
