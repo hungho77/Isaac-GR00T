@@ -236,6 +236,9 @@ def build_holoq_pack(
         "dit_activation_granularity": dit_activation_granularity,
         "activation_percentile": calibration_manifest["activation_percentile"],
         "seed": calibration_manifest["seed"],
+        # Which rotation the recorded transforms were built with ("svd_hadamard" =
+        # HoloQ-style, "svd" = DuQuant-style); older artifacts predate the field.
+        "rotation_mode": calibration_manifest.get("rotation_mode", "svd_hadamard"),
     }
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
