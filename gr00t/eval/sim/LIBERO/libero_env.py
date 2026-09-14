@@ -205,7 +205,25 @@ class LiberoEnv(gym.Env):
         return observation, reward, done, truncated, info
 
 
+def _default_egl_device_for_mig() -> None:
+    """Give robosuite a plain EGL device index when the GPU is a MIG instance.
+
+    robosuite's EGL setup reads ``CUDA_VISIBLE_DEVICES`` and calls ``int()`` on it.
+    On a MIG GPU that variable holds a ``MIG-<uuid>`` string, so rendering dies at
+    the first ``env.reset()``. ``MUJOCO_EGL_DEVICE_ID`` takes precedence there. Only
+    applied when the value is not already a device index, and never over a choice
+    the caller made.
+    """
+    visible = os.environ.get("CUDA_VISIBLE_DEVICES", "")
+    if not visible:
+        return
+    if all(part.strip().isdigit() for part in visible.split(",") if part.strip()):
+        return
+    os.environ.setdefault("MUJOCO_EGL_DEVICE_ID", "0")
+
+
 def register_libero_envs():
+    _default_egl_device_for_mig()
     benchmark_dict = benchmark.get_benchmark_dict()
     for task_suite_name in [
         "libero_10",
