@@ -50,7 +50,11 @@ for raw in src.read_text().splitlines():
     lines.append(replacements.get(name, raw))
 dst.write_text("\n".join(lines) + "\n")
 PY
-uv pip install --requirements $PATCHED_REQUIREMENTS
+# robomimic declares egl-probe, whose CMakeLists.txt no longer builds under cmake >= 4.0;
+# robomimic does not import egl-probe at runtime, so install it separately with --no-deps.
+grep -v "robomimic" "$PATCHED_REQUIREMENTS" > "$LIBERO_UV_ENV/requirements-py312-no-robomimic.txt"
+uv pip install --requirements "$LIBERO_UV_ENV/requirements-py312-no-robomimic.txt"
+uv pip install "robomimic==0.2.0" --no-deps
 uv pip install -e $LIBERO_REPO --config-settings editable_mode=compat
 # py3.12 pins: stop the resolver backtracking numba/llvmlite to the 3.10-only build
 uv pip install torch==2.9.0 torchvision==0.24.0 pydantic av tianshou==0.5.1 numba==0.65.1 llvmlite==0.47.0 tyro pandas dm_tree einops==0.8.1 albumentations==1.4.18 zmq
