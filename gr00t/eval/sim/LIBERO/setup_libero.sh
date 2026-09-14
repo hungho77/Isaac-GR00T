@@ -35,7 +35,7 @@ replacements = {
     "transformers": "transformers==4.57.3",
     "opencv-python": "opencv-python==4.10.0.84",
     "matplotlib": "matplotlib==3.9.4",
-    "wandb": "wandb==0.18.7",  # py3.12: 0.13.1 -> pathtools -> removed `imp`
+    "wandb": "wandb==0.18.7",  # py3.12: 0.13.1 -> pathtools -> removed the imp module
 }
 
 src = Path("$LIBERO_REPO/requirements.txt")
